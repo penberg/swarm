@@ -428,6 +428,8 @@ swarm repo add <host/owner/name> [--alias <name>]
 #### Arguments
 
 - `<host/owner/name>`: Canonical repository identifier.
+  `swarm` also accepts pasted repository URLs such as `https://github.com/owner/repo`,
+  `git@github.com:owner/repo.git`, and GitHub links with extra path segments like pull requests.
 
 #### Options
 
@@ -436,6 +438,7 @@ swarm repo add <host/owner/name> [--alias <name>]
 #### Behavior
 
 - Validates `host/owner/name` format.
+- Normalizes pasted repository URLs to the canonical `host/owner/name` format.
 - Creates a repository record in `index.db`.
 - Defaults the alias to the repository name if `--alias` is omitted.
 - Rejects duplicates.
@@ -444,6 +447,8 @@ swarm repo add <host/owner/name> [--alias <name>]
 
 ```text
 swarm repo add github.com/penberg/swarm
+swarm repo add https://github.com/penberg/swarm
+swarm repo add https://github.com/penberg/swarm/pull/123
 swarm repo add github.com/penberg/other --alias other
 ```
 

@@ -19,21 +19,7 @@ pub struct Repository {
 
 impl Repository {
     pub fn parse(input: &str, alias: Option<&str>) -> Result<Self, SwarmError> {
-        let mut parts = input.split('/');
-        let host = parts.next().unwrap_or_default().trim();
-        let owner = parts.next().unwrap_or_default().trim();
-        let name = parts.next().unwrap_or_default().trim();
-
-        if host.is_empty()
-            || owner.is_empty()
-            || name.is_empty()
-            || parts.next().is_some()
-            || [host, owner, name]
-                .iter()
-                .any(|part| part.contains(char::is_whitespace))
-        {
-            return Err(SwarmError::InvalidRepository(input.to_string()));
-        }
+        let (host, owner, name) = parse_repository_input(input)?;
 
         let default_alias = alias
             .map(str::trim)
@@ -357,6 +343,85 @@ fn path_to_string(path: &Path) -> Result<&str, SwarmError> {
     path.to_str().ok_or(SwarmError::PathResolution)
 }
 
+fn parse_repository_input(input: &str) -> Result<(&str, &str, &str), SwarmError> {
+    let input = input.trim();
+
+    if let Some(repo) = parse_repository_url(input) {
+        return Ok(repo);
+    }
+
+    parse_canonical_repository(input)
+        .ok_or_else(|| SwarmError::InvalidRepository(input.to_string()))
+}
+
+fn parse_repository_url(input: &str) -> Option<(&str, &str, &str)> {
+    if let Some(rest) = input
+        .strip_prefix("https://")
+        .or_else(|| input.strip_prefix("http://"))
+    {
+        return parse_url_like_repository(rest);
+    }
+
+    if let Some(rest) = input.strip_prefix("ssh://") {
+        return parse_url_like_repository(rest.strip_prefix("git@").unwrap_or(rest));
+    }
+
+    if let Some(rest) = input.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        return parse_repository_path(host, path, true);
+    }
+
+    None
+}
+
+fn parse_url_like_repository(input: &str) -> Option<(&str, &str, &str)> {
+    let (authority, path) = input.split_once('/')?;
+    let host = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
+
+    parse_repository_path(host, path, true)
+}
+
+fn parse_canonical_repository(input: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = input.split('/');
+    let host = parts.next()?.trim();
+    let owner = parts.next()?.trim();
+    let name = parts.next()?.trim_end_matches(".git").trim();
+
+    if parts.next().is_some() {
+        return None;
+    }
+
+    validate_repository_parts(host, owner, name).then_some((host, owner, name))
+}
+
+fn parse_repository_path<'a>(
+    host: &'a str,
+    path: &'a str,
+    allow_extra_segments: bool,
+) -> Option<(&'a str, &'a str, &'a str)> {
+    let mut parts = path.trim_matches('/').split('/');
+    let owner = parts.next()?.trim();
+    let name = parts.next()?.trim_end_matches(".git").trim();
+
+    if !allow_extra_segments && parts.next().is_some() {
+        return None;
+    }
+
+    validate_repository_parts(host.trim(), owner, name).then_some((host.trim(), owner, name))
+}
+
+fn validate_repository_parts(host: &str, owner: &str, name: &str) -> bool {
+    !host.is_empty()
+        && !owner.is_empty()
+        && !name.is_empty()
+        && [host, owner, name]
+            .iter()
+            .all(|part| !part.contains(char::is_whitespace))
+}
+
 fn unix_timestamp() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -386,5 +451,45 @@ fn resolve_remote_host(host: &str) -> &str {
         "codeberg" => "codeberg.org",
         "bitbucket" => "bitbucket.org",
         _ => host,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Repository;
+
+    #[test]
+    fn parses_canonical_repository() {
+        let repo = Repository::parse("github.com/penberg/swarm", None).unwrap();
+
+        assert_eq!(repo.host, "github.com");
+        assert_eq!(repo.owner, "penberg");
+        assert_eq!(repo.name, "swarm");
+        assert_eq!(repo.alias.as_deref(), Some("swarm"));
+    }
+
+    #[test]
+    fn parses_https_github_repository_url() {
+        let repo = Repository::parse("https://github.com/penberg/swarm", None).unwrap();
+
+        assert_eq!(repo.canonical(), "github.com/penberg/swarm");
+    }
+
+    #[test]
+    fn parses_github_repository_url_with_trailing_segments() {
+        let repo =
+            Repository::parse("https://github.com/penberg/swarm/pull/123", Some("local")).unwrap();
+
+        assert_eq!(repo.canonical(), "github.com/penberg/swarm");
+        assert_eq!(repo.alias.as_deref(), Some("local"));
+    }
+
+    #[test]
+    fn parses_git_remote_urls() {
+        let https_repo = Repository::parse("https://github.com/penberg/swarm.git", None).unwrap();
+        let ssh_repo = Repository::parse("git@github.com:penberg/swarm.git", None).unwrap();
+
+        assert_eq!(https_repo.canonical(), "github.com/penberg/swarm");
+        assert_eq!(ssh_repo.canonical(), "github.com/penberg/swarm");
     }
 }
