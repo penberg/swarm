@@ -65,6 +65,10 @@ pub enum WorkspaceSubcommand {
     Remove {
         workspace: String,
     },
+    // ADD THIS NEW COMMAND:
+    Prune {
+        repository: String,
+    },
 }
 
 #[derive(Debug, Parser)]

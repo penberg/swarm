@@ -20,6 +20,7 @@ pub struct Workspace {
     pub branch: String,
     pub path: PathBuf,
     pub created_at: i64,
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,8 +117,9 @@ impl WorkspaceStore {
         let db = self.open_repo_db(&repo).await?;
         let mut stmt = db
             .prepare(
-                "SELECT name, branch, path, created_at
+                "SELECT name, branch, path, created_at, archived_at
                  FROM workspaces
+                 WHERE archived_at IS NULL
                  ORDER BY created_at, name",
             )
             .await?;
@@ -125,13 +127,14 @@ impl WorkspaceStore {
         let mut workspaces = Vec::new();
 
         while let Some(row) = rows.next().await? {
-            let workspace = Workspace {
+          let workspace = Workspace {
                 repository: repo.canonical(),
                 repository_alias: repo.alias.clone().unwrap_or_else(|| repo.name.clone()),
                 name: row.get::<String>(0)?,
                 branch: row.get::<String>(1)?,
                 path: PathBuf::from(row.get::<String>(2)?),
                 created_at: row.get::<i64>(3)?,
+                archived_at: row.get::<Option<i64>>(4)?, // <-- ADD THIS
             };
             workspaces.push(self.refresh_workspace_branch(&db, workspace).await?);
         }
@@ -151,7 +154,7 @@ impl WorkspaceStore {
             .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))
     }
 
-    pub async fn remove(&self, workspace: &str) -> Result<Workspace, SwarmError> {
+  pub async fn remove(&self, workspace: &str) -> Result<Workspace, SwarmError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -161,26 +164,55 @@ impl WorkspaceStore {
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
             .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))?;
-        let bare_repo_path = self.repos.bare_repo_path(&repo);
-
-        run_git(
-            Some(&self.repos.repo_dir(&repo)),
-            [
-                format!("--git-dir={}", bare_repo_path.display()),
-                "worktree".to_string(),
-                "remove".to_string(),
-                "--force".to_string(),
-                workspace.path.display().to_string(),
-            ],
-        )?;
-
+       
+        let archived_time = unix_timestamp();
         db.execute(
-            "DELETE FROM workspaces WHERE name = ?1",
-            [workspace.name.as_str()],
+            "UPDATE workspaces SET archived_at = ?2 WHERE name = ?1",
+            (workspace.name.as_str(), archived_time),
         )
         .await?;
 
-        Ok(workspace)
+        Ok(Workspace {
+            archived_at: Some(archived_time),
+            ..workspace
+        })
+    }
+    pub async fn prune(&self, repository: &str) -> Result<Vec<String>, SwarmError> {
+        let repo = self
+            .repos
+            .resolve_repository(repository)
+            .await?
+            .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
+        let db = self.open_repo_db(&repo).await?;
+        let mut stmt = db
+            .prepare("SELECT name, path FROM workspaces WHERE archived_at IS NOT NULL")
+            .await?;
+        let mut rows = stmt.query(()).await?;
+
+        let mut pruned_names = Vec::new();
+        let bare_repo_path = self.repos.bare_repo_path(&repo); 
+        while let Some(row) = rows.next().await? {
+            let name: String = row.get(0)?;
+            let path_str: String = row.get(1)?;
+            let path = PathBuf::from(path_str);
+
+            let _ = run_git(
+                Some(&self.repos.repo_dir(&repo)),
+                [
+                    format!("--git-dir={}", bare_repo_path.display()),
+                    "worktree".to_string(),
+                    "remove".to_string(),
+                    "--force".to_string(),
+                    path.display().to_string(),
+                ],
+            );
+
+            pruned_names.push(name);
+        }
+        db.execute("DELETE FROM workspaces WHERE archived_at IS NOT NULL", ())
+            .await?;
+
+        Ok(pruned_names)
     }
 
     pub async fn rename(&self, workspace: &str, new_name: &str) -> Result<Workspace, SwarmError> {
@@ -317,10 +349,10 @@ impl WorkspaceStore {
     ) -> Result<Option<Workspace>, SwarmError> {
         let mut stmt = db
             .prepare(
-                "SELECT name, branch, path, created_at
+               "SELECT name, branch, path, created_at, archived_at
                  FROM workspaces
-                 WHERE name = ?1
-                 LIMIT 1",
+                 WHERE name = ?1 AND archived_at IS NULL
+                 LIMIT 1"
             )
             .await?;
         let mut rows = stmt.query([name]).await?;
@@ -333,6 +365,7 @@ impl WorkspaceStore {
                 branch: row.get::<String>(1)?,
                 path: PathBuf::from(row.get::<String>(2)?),
                 created_at: row.get::<i64>(3)?,
+                archived_at: row.get::<Option<i64>>(4)?,
             };
             return Ok(Some(self.refresh_workspace_branch(db, workspace).await?));
         }
@@ -543,7 +576,8 @@ pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), Swarm
             name TEXT PRIMARY KEY,
             branch TEXT NOT NULL,
             path TEXT NOT NULL UNIQUE,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            archived_at INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -578,7 +612,7 @@ pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), Swarm
         columns.push(row.get::<String>(1)?);
     }
 
-    if columns != ["name", "branch", "path", "created_at"] {
+    if columns != ["name", "branch", "path", "created_at", "archived_at"] {
         conn.execute_batch(
             "
             DROP TABLE workspaces;
@@ -586,7 +620,8 @@ pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), Swarm
                 name TEXT PRIMARY KEY,
                 branch TEXT NOT NULL,
                 path TEXT NOT NULL UNIQUE,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                archived_at INTEGER
             );
             ",
         )
