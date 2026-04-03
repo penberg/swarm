@@ -105,6 +105,7 @@ impl WorkspaceStore {
             branch,
             path: workspace_path,
             created_at,
+            archived_at: None,
         })
     }
 
@@ -127,7 +128,7 @@ impl WorkspaceStore {
         let mut workspaces = Vec::new();
 
         while let Some(row) = rows.next().await? {
-          let workspace = Workspace {
+            let workspace = Workspace {
                 repository: repo.canonical(),
                 repository_alias: repo.alias.clone().unwrap_or_else(|| repo.name.clone()),
                 name: row.get::<String>(0)?,
@@ -154,7 +155,7 @@ impl WorkspaceStore {
             .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))
     }
 
-  pub async fn remove(&self, workspace: &str) -> Result<Workspace, SwarmError> {
+    pub async fn remove(&self, workspace: &str) -> Result<Workspace, SwarmError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -164,7 +165,7 @@ impl WorkspaceStore {
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
             .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))?;
-       
+
         let archived_time = unix_timestamp();
         db.execute(
             "UPDATE workspaces SET archived_at = ?2 WHERE name = ?1",
@@ -190,7 +191,7 @@ impl WorkspaceStore {
         let mut rows = stmt.query(()).await?;
 
         let mut pruned_names = Vec::new();
-        let bare_repo_path = self.repos.bare_repo_path(&repo); 
+        let bare_repo_path = self.repos.bare_repo_path(&repo);
         while let Some(row) = rows.next().await? {
             let name: String = row.get(0)?;
             let path_str: String = row.get(1)?;
@@ -296,6 +297,7 @@ impl WorkspaceStore {
             branch: next_name,
             path: next_path,
             created_at: workspace.created_at,
+            archived_at: workspace.archived_at,
         })
     }
 
@@ -349,10 +351,10 @@ impl WorkspaceStore {
     ) -> Result<Option<Workspace>, SwarmError> {
         let mut stmt = db
             .prepare(
-               "SELECT name, branch, path, created_at, archived_at
+                "SELECT name, branch, path, created_at, archived_at
                  FROM workspaces
                  WHERE name = ?1 AND archived_at IS NULL
-                 LIMIT 1"
+                 LIMIT 1",
             )
             .await?;
         let mut rows = stmt.query([name]).await?;
@@ -391,7 +393,10 @@ impl WorkspaceStore {
         )
         .await?;
 
-        Ok(Workspace { branch, ..workspace })
+        Ok(Workspace {
+            branch,
+            ..workspace
+        })
     }
 
     async fn count_workspace_sessions(

@@ -55,10 +55,15 @@ pub async fn run(cmd: WorkspaceCommand) -> Result<(), SwarmError> {
                 workspace.name, workspace.repository_alias
             );
         }
-    }
-WorkspaceSubcommand::Prune { repository } => {
+        WorkspaceSubcommand::Prune { repository } => {
             let pruned = store.prune(&repository).await?;
-            println!("Successfully pruned {} archived workspaces from '{}'", pruned.len(), repository);
+            println!(
+                "Successfully pruned {} archived workspaces from '{}'",
+                pruned.len(),
+                repository
+            );
         }
+    }
+
     Ok(())
 }
