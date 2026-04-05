@@ -55,6 +55,33 @@ cargo install --path .
 
 See [MANUAL.md](MANUAL.md) for the full reference.
 
+### CLI Only Quickstart
+
+Using the `swarmctl` CLI tool allows building with `--no-default-features` (avoids the GTK/etc deps).
+Usage of the tool then as follows from the CLI:
+```
+# install to ~/.cargo/bin/swarmctl, add to PATH if you want
+cargo install --path . 
+
+# using a repo of mine to make it clear what is 'swarm' related and what isn't:
+~/.cargo/bin/swarmctl repo add github.com/harryhaaren/linwhisper
+~/.cargo/bin/swarmctl repo list
+~/.cargo/bin/swarmctl ws create linwhisper
+~/.cargo/bin/swarmctl ws list
+~/.cargo/bin/swarmctl ws list linwhisper
+~/.cargo/bin/swarmctl session create linwhisper:workspace -- bash
+~/.cargo/bin/swarmctl session list
+~/.cargo/bin/swarmctl session attach <sessionID>    # eg "s69d2270221a"
+~/.cargo/bin/swarmctl session list
+~/.cargo/bin/swarmctl session info
+~/.cargo/bin/swarmctl session info s69d2270221a
+~/.cargo/bin/swarmctl session stop s69d2270221a
+~/.cargo/bin/swarmctl session info
+~/.cargo/bin/swarmctl session list
+~/.cargo/bin/swarmctl session prune
+~/.cargo/bin/swarmctl session list
+```
+
 ## License
 
 Swarm is available under the [MIT license](LICENSE.md).
