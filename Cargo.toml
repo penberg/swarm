@@ -16,7 +16,7 @@ clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 directories = "6"
 gtk = { package = "gtk4", version = "0.10", features = ["v4_14"], optional = true }
-libghostty-vt = { version = "0.1.1", optional = true }
+libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", branch = "static-linking", optional = true, version = "0.1.1", features = ["link-static"] }
 libc = "0.2"
 pangocairo = { version = "0.21", optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -33,9 +33,6 @@ path = "swarmctl.rs"
 name = "swarm"
 path = "ui/swarm.rs"
 required-features = ["ui"]
-
-[patch.crates-io]
-libghostty-vt-sys = { path = "vendor-libghostty-vt-sys" }
 
 # The profile that 'dist' will build with
 [profile.dist]

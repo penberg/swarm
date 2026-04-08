@@ -585,7 +585,12 @@ impl SessionTerminalState {
         self.update_metrics(cr);
         self.resize_terminal(width, height);
 
-        let scrollbar_offset = self.terminal.scrollbar().ok().map(|s| s.offset).unwrap_or(0);
+        let scrollbar_offset = self
+            .terminal
+            .scrollbar()
+            .ok()
+            .map(|s| s.offset)
+            .unwrap_or(0);
         let selection = self.selection;
 
         let Ok(snapshot) = self.render_state.update(&self.terminal) else {
@@ -802,7 +807,7 @@ impl SessionTerminalState {
     fn is_alternate_screen(&self) -> bool {
         matches!(
             self.terminal.active_screen(),
-            Ok(ffi::GhosttyTerminalScreen_GHOSTTY_TERMINAL_SCREEN_ALTERNATE)
+            Ok(ffi::TerminalScreen::ALTERNATE)
         )
     }
 
@@ -887,7 +892,12 @@ impl SessionTerminalState {
         let (start, end) = selection.normalized();
 
         let snapshot = self.render_state.update(&self.terminal).ok()?;
-        let scrollbar_offset = self.terminal.scrollbar().ok().map(|s| s.offset).unwrap_or(0);
+        let scrollbar_offset = self
+            .terminal
+            .scrollbar()
+            .ok()
+            .map(|s| s.offset)
+            .unwrap_or(0);
 
         let mut rows = self.row_iterator.update(&snapshot).ok()?;
         let mut output = String::new();
@@ -903,7 +913,11 @@ impl SessionTerminalState {
             }
 
             let start_col = if abs_row == start.row { start.col } else { 0 };
-            let end_col_exclusive = if abs_row == end.row { end.col } else { u16::MAX };
+            let end_col_exclusive = if abs_row == end.row {
+                end.col
+            } else {
+                u16::MAX
+            };
 
             let Ok(mut cells) = self.cell_iterator.update(row) else {
                 continue;
@@ -931,7 +945,11 @@ impl SessionTerminalState {
             emitted_any = true;
         }
 
-        if output.is_empty() { None } else { Some(output) }
+        if output.is_empty() {
+            None
+        } else {
+            Some(output)
+        }
     }
 }
 
