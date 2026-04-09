@@ -209,6 +209,12 @@ fn install_context_menu(area: &DrawingArea, state: Rc<RefCell<SessionTerminalSta
         let popover = popover.clone();
         let area = area.clone();
         gesture.connect_pressed(move |_g, _n, x, y| {
+            if area.root().is_none() {
+                return;
+            }
+            if popover.parent().is_none() {
+                popover.set_parent(&area);
+            }
             area.grab_focus();
             let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
@@ -216,11 +222,6 @@ fn install_context_menu(area: &DrawingArea, state: Rc<RefCell<SessionTerminalSta
         });
     }
     area.add_controller(gesture);
-
-    {
-        let popover = popover.clone();
-        area.connect_unrealize(move |_| popover.unparent());
-    }
 }
 
 fn install_drag_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
