@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-04-10
+
+### Changed
+
+- Share Cargo target dir across worktrees. ([#55](https://github.com/penberg/swarm/pull/55))
+
+### Fixed
+
+- Fix terminal context menu popover lifecycle. ([#57](https://github.com/penberg/swarm/pull/57))
+
 ## [0.1.3] - 2026-04-07
 
 ### Added
