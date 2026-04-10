@@ -11,6 +11,8 @@ Read the [announcement blog post](https://penberg.org/blog/swarm.html) for more 
 
 ## Features
 
+- **Works with any coding agent** — run Claude Code, Codex, OpenCode, or any other CLI tool inside a session. Sessions are just terminals,
+so anything that runs in a shell runs under Swarm.
 - **Workspace per feature using git worktrees** — every workspace is an isolated git worktree, so parallel agents never share a checkout or step on each other's branches.
 - **Fast workspace cloning** — branch off an existing workspace into a new worktree and branch in one command.
 - **Multi-repository management** — register any number of GitHub repositories and manage their workspaces and sessions from one place.
@@ -49,6 +51,19 @@ Swarm exists to tame that. It gives you a single place to manage all your reposi
 Swarm organizes work into **repositories**, **workspaces**, and **sessions**. A repository is the git repository that holds your project's source code. A workspace is an isolated copy of that source code, backed by a git worktree, where work happens independently without interfering with other workspaces. A session is a persistent terminal environment running inside a workspace — it could be a coding agent, a shell, or any long-running command.
 
 For example, a typical **workspace-per-feature** workflow looks like this: create a workspace for every feature or bug fix, let a coding agent work on it in a session, submit a pull request, address review comments and iterate — all within the same workspace. When the work is merged to mainline, remove the workspace.
+
+## FAQ
+
+### How is Swarm different from _X_?
+
+[Superset](https://github.com/superset-sh/superset) is a macOS desktop app for running multiple CLI coding agents in parallel across git worktrees. Unlike Swarm, it ships with a built-in diff viewer, editor, and terminal, supports one-click handoff to external editors, and requires an account. Swarm is Linux-only, fully local, and focuses on terminal sessions and worktree management.
+
+[cmux](https://github.com/manaflow-ai/cmux) is a macOS terminal multiplexer for running coding agents in parallel, with split panes, per-ta
+b notifications, an in-app scriptable browser, and SSH workspaces. Unlike Swarm, it doesn't create or manage git worktrees — you supply the
+ checkout layout yourself. Swarm runs on Linux as a GTK 4 app, creates worktrees automatically, and has an opinionated, but minimal feature
+ set.
+
+[Conductor](https://www.conductor.build/) is a closed-source macOS app for running Claude Code and Codex agents in parallel across git worktrees, with a built-in UI for inspecting activity and reviewing/merging changes. Unlike Swarm, it has no CLI and bundles its own review workflow. Swarm is MIT-licensed, Linux-only, and leaves review to whatever tools you'd run in a terminal.
 
 ## Building from source
 
