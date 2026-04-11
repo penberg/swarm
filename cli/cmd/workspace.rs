@@ -1,5 +1,5 @@
 use crate::opts::{WorkspaceCommand, WorkspaceSubcommand};
-use swarm::{
+use swarm_core::{
     SwarmError,
     sessions::{SessionStore, default_session_command},
     workspaces::WorkspaceStore,

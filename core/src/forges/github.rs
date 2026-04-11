@@ -304,7 +304,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        format_command_stderr, parse_pull_request_status, summarize_checks, PullRequestStatusState,
+        PullRequestStatusState, format_command_stderr, parse_pull_request_status, summarize_checks,
     };
 
     #[test]

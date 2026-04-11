@@ -1,5 +1,5 @@
 use crate::opts::{PruneCommand, PruneSubcommand};
-use swarm::{SwarmError, prune::PruneStore};
+use swarm_core::{SwarmError, prune::PruneStore};
 
 pub async fn run(cmd: PruneCommand) -> Result<(), SwarmError> {
     let store = PruneStore::open().await?;

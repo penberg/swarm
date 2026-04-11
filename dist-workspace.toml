@@ -1,5 +1,5 @@
 [workspace]
-members = ["cargo:."]
+members = ["cargo:cli", "cargo:gtk"]
 
 # Config for 'dist'
 [dist]

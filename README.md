@@ -80,7 +80,8 @@ Then install Zig 0.15.2 and make sure `zig` is on your `PATH`.
 Install the program with:
 
 ```sh
-cargo install --path .
+cargo install --path cli --bin swarmctl
+cargo install --path gtk --bin swarm
 ```
 
 ## Documentation

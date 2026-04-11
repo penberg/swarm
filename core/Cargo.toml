@@ -1,0 +1,15 @@
+[package]
+name = "swarm-core"
+version = "0.1.4"
+edition = "2024"
+repository = "https://github.com/penberg/swarm"
+
+[dependencies]
+crossterm = "0.28"
+directories = "6"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+turso = "0.4"

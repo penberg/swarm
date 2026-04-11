@@ -1,15 +1,15 @@
-use gtk::{glib, prelude::*, Align, Box as GtkBox, Button, LinkButton, Orientation, Stack};
+use gtk::{Align, Box as GtkBox, Button, LinkButton, Orientation, Stack, glib, prelude::*};
 use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc, sync::mpsc, time::Duration};
-use swarm::forges::github::{self, PullRequestStatus};
+use swarm_core::forges::github::{self, PullRequestStatus};
 
 use crate::{
     app::{
-        clear_box, clear_workspace_pr_status, current_groups, preferred_session_for_workspace,
-        remember_selected_session, render_selected_workspace_detail, request_workspace_pr_status,
-        schedule_render_current_ui, workspace_pr_snapshot, workspace_ref, AppState,
-        WorkspacePrState,
+        AppState, WorkspacePrState, clear_box, clear_workspace_pr_status, current_groups,
+        preferred_session_for_workspace, remember_selected_session,
+        render_selected_workspace_detail, request_workspace_pr_status, schedule_render_current_ui,
+        workspace_pr_snapshot, workspace_ref,
     },
-    data::{close_session, create_session, foreground_program, SessionEntry, WorkspaceEntry},
+    data::{SessionEntry, WorkspaceEntry, close_session, create_session, foreground_program},
     ghostty,
 };
 
@@ -501,17 +501,19 @@ fn install_session_tab_refresh(session_tabs: &GtkBox, sessions: &[SessionEntry])
         .collect();
     let (tx, rx) = std::sync::mpsc::channel::<Vec<(String, String)>>();
 
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let programs: Vec<(String, String)> = session_info
-            .iter()
-            .map(|(id, pid, fallback)| {
-                let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
-                (id.clone(), program)
-            })
-            .collect();
-        if tx.send(programs).is_err() {
-            break;
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let programs: Vec<(String, String)> = session_info
+                .iter()
+                .map(|(id, pid, fallback)| {
+                    let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
+                    (id.clone(), program)
+                })
+                .collect();
+            if tx.send(programs).is_err() {
+                break;
+            }
         }
     });
 

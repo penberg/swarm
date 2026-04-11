@@ -22,7 +22,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --locked --no-default-features
+        run: cargo build --locked -p swarm-core -p swarm-cli
 
       - name: Test
-        run: cargo test --locked --no-default-features
+        run: cargo test --locked -p swarm-core -p swarm-cli

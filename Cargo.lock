@@ -2160,21 +2160,38 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "swarm"
+name = "swarm-cli"
 version = "0.1.4"
 dependencies = [
  "clap",
+ "serde_json",
+ "swarm-core",
+ "tokio",
+]
+
+[[package]]
+name = "swarm-core"
+version = "0.1.4"
+dependencies = [
  "crossterm",
  "directories",
- "gtk4",
  "libc",
- "libghostty-vt",
- "pangocairo",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "turso",
+]
+
+[[package]]
+name = "swarm-gtk"
+version = "0.1.4"
+dependencies = [
+ "gtk4",
+ "libghostty-vt",
+ "pangocairo",
+ "swarm-core",
+ "tokio",
 ]
 
 [[package]]

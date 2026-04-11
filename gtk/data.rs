@@ -4,7 +4,7 @@ use std::{
     process::Command,
     time::{Duration, SystemTime},
 };
-use swarm::{
+use swarm_core::{
     SwarmError,
     repos::{Repository, RepositoryStore},
     sessions::{SessionStore, default_session_command},

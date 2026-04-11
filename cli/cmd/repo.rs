@@ -1,5 +1,5 @@
 use crate::opts::{RepoCommand, RepoSubcommand};
-use swarm::{SwarmError, repos::RepositoryStore};
+use swarm_core::{SwarmError, repos::RepositoryStore};
 
 pub async fn run(cmd: RepoCommand) -> Result<(), SwarmError> {
     let store = RepositoryStore::open().await?;

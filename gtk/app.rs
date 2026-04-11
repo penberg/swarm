@@ -1,12 +1,11 @@
 use gtk::{
-    gdk,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
+    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
+    Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow,
+    SelectionMode, Spinner, Widget, gdk,
     gio::{self, FileMonitor, FileMonitorFlags},
     glib,
     prelude::*,
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
-    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
-    Orientation, PolicyType, PropagationPhase, ScrolledWindow, SelectionMode, Spinner, Widget,
-    STYLE_PROVIDER_PRIORITY_APPLICATION,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -16,14 +15,14 @@ use std::{
     sync::mpsc,
     time::{Duration, Instant},
 };
-use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
+use swarm_core::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 
 use crate::{
     data::{
-        add_repository, clone_workspace, collapse_repository, create_workspace,
-        current_workspace_branch, current_workspace_head, expand_repository, load_workspace_groups,
-        remove_workspace, rename_workspace, sync_repository, workspace_head_path, WorkspaceEntry,
-        WorkspaceGroup,
+        WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, collapse_repository,
+        create_workspace, current_workspace_branch, current_workspace_head, expand_repository,
+        load_workspace_groups, remove_workspace, rename_workspace, sync_repository,
+        workspace_head_path,
     },
     workspace_panel::DetailWidgets,
 };
