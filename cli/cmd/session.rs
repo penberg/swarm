@@ -1,6 +1,6 @@
-use crate::{
+use crate::opts::{SessionCommand, SessionSubcommand};
+use swarm::{
     SwarmError,
-    opts::{SessionCommand, SessionSubcommand},
     sessions::{SessionStore, serve_runtime},
 };
 

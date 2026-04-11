@@ -1,6 +1,9 @@
+mod cmd;
+mod opts;
+
 use clap::Parser;
-use swarm::cmd;
-use swarm::opts::{Command, Opts};
+
+use crate::opts::{Command, Opts};
 
 #[tokio::main]
 async fn main() {

@@ -27,7 +27,7 @@ turso = "0.4"
 
 [[bin]]
 name = "swarmctl"
-path = "swarmctl.rs"
+path = "cli/main.rs"
 
 [[bin]]
 name = "swarm"
