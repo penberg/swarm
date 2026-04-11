@@ -8,8 +8,8 @@ repository = "https://github.com/penberg/swarm"
 path = "lib.rs"
 
 [features]
-default = ["ui"]
-ui = ["dep:gtk", "dep:libghostty-vt", "dep:pangocairo"]
+default = ["gtk"]
+gtk = ["dep:gtk", "dep:libghostty-vt", "dep:pangocairo"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -31,8 +31,8 @@ path = "swarmctl.rs"
 
 [[bin]]
 name = "swarm"
-path = "ui/swarm.rs"
-required-features = ["ui"]
+path = "gtk/swarm.rs"
+required-features = ["gtk"]
 
 [patch.crates-io]
 libghostty-vt-sys = { path = "vendor-libghostty-vt-sys" }
