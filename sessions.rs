@@ -18,6 +18,7 @@ use turso::{Builder, Connection, Row};
 use crate::{
     SwarmError, database_error,
     repos::{Repository, RepositoryStore},
+    toolchains,
     workspaces::{Workspace, WorkspaceStore, migrate_repo_db},
 };
 
@@ -530,7 +531,15 @@ pub async fn serve_runtime(
 
     let listener = UnixListener::bind(&socket_path)?;
     listener.set_nonblocking(true)?;
-    let (pty, child_pid) = spawn_pty_child(&workspace_path, command)?;
+    let repo_dir = workspace_path
+        .parent()
+        .and_then(|path| path.parent())
+        .ok_or(SwarmError::PathResolution)?;
+    let (pty, child_pid) = spawn_pty_child(
+        &workspace_path,
+        &toolchains::session_env(repo_dir, &workspace_path),
+        command,
+    )?;
 
     fs::write(
         &meta_path,
@@ -902,7 +911,11 @@ impl Drop for Pty {
     }
 }
 
-fn spawn_pty_child(cwd: &Path, command: &[String]) -> Result<(Pty, u32), SwarmError> {
+fn spawn_pty_child(
+    cwd: &Path,
+    session_env: &[toolchains::SessionEnvVar],
+    command: &[String],
+) -> Result<(Pty, u32), SwarmError> {
     let mut winsize = libc::winsize {
         ws_row: 24,
         ws_col: 80,
@@ -948,16 +961,13 @@ fn spawn_pty_child(cwd: &Path, command: &[String]) -> Result<(Pty, u32), SwarmEr
             }
         }
 
-        // share cargo build artifacts across worktrees in the same repo
-        if cwd.join("Cargo.toml").exists() {
-            if let Some(repo_dir) = cwd.parent().and_then(|p| p.parent()) {
-                let target_dir = repo_dir.join("target");
-                if let Ok(val) = CString::new(target_dir.as_os_str().as_encoded_bytes()) {
-                    if let Ok(key) = CString::new("CARGO_TARGET_DIR") {
-                        unsafe {
-                            libc::setenv(key.as_ptr(), val.as_ptr(), 0);
-                        }
-                    }
+        for env_var in session_env {
+            if let (Ok(key), Ok(value)) = (
+                CString::new(env_var.key),
+                CString::new(env_var.value.as_slice()),
+            ) {
+                unsafe {
+                    libc::setenv(key.as_ptr(), value.as_ptr(), i32::from(env_var.overwrite));
                 }
             }
         }

@@ -4,6 +4,7 @@ pub mod opts;
 pub mod prune;
 pub mod repos;
 pub mod sessions;
+pub mod toolchains;
 pub mod workspaces;
 
 use std::path::{Path, PathBuf};
