@@ -14,8 +14,8 @@ use std::{
     cell::RefCell,
     f64,
     fmt::Write as _,
-    fs::{self, File},
-    io::{self, Read, Write},
+    fs::File,
+    io::{self, Read, Seek, SeekFrom, Write},
     os::unix::{fs::OpenOptionsExt, io::AsRawFd, net::UnixStream},
     path::Path,
     rc::Rc,
@@ -27,6 +27,8 @@ use crate::data::SessionEntry;
 const DEFAULT_COLS: u16 = 120;
 const DEFAULT_ROWS: u16 = 40;
 const MAX_SCROLLBACK: usize = 20_000;
+const MAX_LOG_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_SOCKET_BYTES_PER_POLL: usize = 256 * 1024;
 const FONT_SIZE: f64 = 10.0;
 const FONT_FAMILIES: [&str; 6] = [
     "JetBrainsMono Nerd Font",
@@ -383,7 +385,7 @@ impl SessionTerminalState {
         .expect("failed to create libghostty-vt terminal");
         apply_pretty_theme(&mut terminal);
 
-        if let Ok(log) = fs::read(Path::new(&session.log_path)) {
+        if let Ok(log) = read_recent_log(Path::new(&session.log_path)) {
             terminal.vt_write(&log);
         }
 
@@ -428,6 +430,7 @@ impl SessionTerminalState {
         };
 
         let mut changed = false;
+        let mut total_bytes = 0usize;
 
         loop {
             let mut chunk = [0_u8; 4096];
@@ -439,6 +442,10 @@ impl SessionTerminalState {
                 Ok(len) => {
                     self.terminal.vt_write(&chunk[..len]);
                     changed = true;
+                    total_bytes = total_bytes.saturating_add(len);
+                    if total_bytes >= MAX_SOCKET_BYTES_PER_POLL {
+                        break;
+                    }
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
@@ -808,6 +815,19 @@ impl SessionTerminalState {
 
         if output.is_empty() { None } else { Some(output) }
     }
+}
+
+fn read_recent_log(path: &Path) -> io::Result<Vec<u8>> {
+    let mut file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len > MAX_LOG_REPLAY_BYTES {
+        // Replaying the full log on the GTK thread can freeze noisy sessions.
+        file.seek(SeekFrom::Start(file_len - MAX_LOG_REPLAY_BYTES))?;
+    }
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn resolved_colors(
