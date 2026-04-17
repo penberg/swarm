@@ -17,9 +17,9 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::{fs::OpenOptionsExt, io::AsRawFd, net::UnixStream},
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::data::SessionEntry;
@@ -28,7 +28,9 @@ const DEFAULT_COLS: u16 = 120;
 const DEFAULT_ROWS: u16 = 40;
 const MAX_SCROLLBACK: usize = 20_000;
 const MAX_LOG_REPLAY_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_LOG_BYTES_PER_POLL: usize = 256 * 1024;
 const MAX_SOCKET_BYTES_PER_POLL: usize = 256 * 1024;
+const SOCKET_RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
 const FONT_SIZE: f64 = 10.0;
 const FONT_FAMILIES: [&str; 6] = [
     "JetBrainsMono Nerd Font",
@@ -311,6 +313,10 @@ struct SessionTerminalState {
     row_iterator: RowIterator<'static>,
     cell_iterator: CellIterator<'static>,
     socket: Option<UnixStream>,
+    socket_path: PathBuf,
+    log_path: PathBuf,
+    log_offset: u64,
+    next_socket_reconnect_at: Instant,
     session_pid: Option<u32>,
     sync_adjustment: bool,
     last_cols: u16,
@@ -385,19 +391,18 @@ impl SessionTerminalState {
         .expect("failed to create libghostty-vt terminal");
         apply_pretty_theme(&mut terminal);
 
-        if let Ok(log) = read_recent_log(Path::new(&session.log_path)) {
+        let log_path = PathBuf::from(&session.log_path);
+        let log_offset = log_path
+            .metadata()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if let Ok(log) = read_recent_log(&log_path) {
             terminal.vt_write(&log);
         }
 
-        let socket = if matches!(session.status.as_str(), "running" | "starting")
-            && Path::new(&session.socket_path).exists()
-        {
-            UnixStream::connect(&session.socket_path)
-                .ok()
-                .and_then(|stream| {
-                    stream.set_nonblocking(true).ok()?;
-                    Some(stream)
-                })
+        let socket_path = PathBuf::from(&session.socket_path);
+        let socket = if matches!(session.status.as_str(), "running" | "starting") {
+            connect_session_socket(&socket_path)
         } else {
             None
         };
@@ -412,6 +417,10 @@ impl SessionTerminalState {
             cell_iterator: CellIterator::new()
                 .expect("failed to create libghostty-vt cell iterator"),
             socket,
+            socket_path,
+            log_path,
+            log_offset,
+            next_socket_reconnect_at: Instant::now(),
             session_pid: session.pid,
             sync_adjustment: false,
             last_cols: DEFAULT_COLS,
@@ -425,8 +434,26 @@ impl SessionTerminalState {
 
     fn poll(&mut self) {
         let should_follow_output = self.should_follow_output();
+        let mut changed = false;
+
+        if self.socket.is_none() {
+            changed |= self.poll_log();
+            self.try_reconnect_socket();
+        } else {
+            changed |= self.poll_socket();
+        }
+
+        if changed {
+            if should_follow_output {
+                self.terminal.scroll_viewport(ScrollViewport::Bottom);
+            }
+            self.refresh_view();
+        }
+    }
+
+    fn poll_socket(&mut self) -> bool {
         let Some(socket) = &mut self.socket else {
-            return;
+            return false;
         };
 
         let mut changed = false;
@@ -437,6 +464,7 @@ impl SessionTerminalState {
             match socket.read(&mut chunk) {
                 Ok(0) => {
                     self.socket = None;
+                    self.next_socket_reconnect_at = Instant::now() + SOCKET_RECONNECT_INTERVAL;
                     break;
                 }
                 Ok(len) => {
@@ -451,16 +479,51 @@ impl SessionTerminalState {
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
                 Err(_) => {
                     self.socket = None;
+                    self.next_socket_reconnect_at = Instant::now() + SOCKET_RECONNECT_INTERVAL;
                     break;
                 }
             }
         }
 
-        if changed {
-            if should_follow_output {
-                self.terminal.scroll_viewport(ScrollViewport::Bottom);
-            }
-            self.refresh_view();
+        changed
+    }
+
+    fn poll_log(&mut self) -> bool {
+        let Ok(metadata) = self.log_path.metadata() else {
+            return false;
+        };
+        let file_len = metadata.len();
+        if file_len <= self.log_offset {
+            return false;
+        }
+
+        let start = self.log_offset;
+        let end = (start + MAX_LOG_BYTES_PER_POLL as u64).min(file_len);
+        let Ok(mut file) = File::open(&self.log_path) else {
+            return false;
+        };
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return false;
+        }
+
+        let mut bytes = vec![0_u8; (end - start) as usize];
+        if file.read_exact(&mut bytes).is_err() {
+            return false;
+        }
+
+        self.log_offset = end;
+        self.terminal.vt_write(&bytes);
+        true
+    }
+
+    fn try_reconnect_socket(&mut self) {
+        if Instant::now() < self.next_socket_reconnect_at {
+            return;
+        }
+
+        self.next_socket_reconnect_at = Instant::now() + SOCKET_RECONNECT_INTERVAL;
+        if let Some(socket) = connect_session_socket(&self.socket_path) {
+            self.socket = Some(socket);
         }
     }
 
@@ -706,6 +769,9 @@ impl SessionTerminalState {
 
         if socket.write_all(&bytes).is_ok() {
             let _ = socket.flush();
+        } else {
+            self.socket = None;
+            self.next_socket_reconnect_at = Instant::now() + SOCKET_RECONNECT_INTERVAL;
         }
     }
 
@@ -716,6 +782,9 @@ impl SessionTerminalState {
 
         if socket.write_all(text.as_bytes()).is_ok() {
             let _ = socket.flush();
+        } else {
+            self.socket = None;
+            self.next_socket_reconnect_at = Instant::now() + SOCKET_RECONNECT_INTERVAL;
         }
     }
 
@@ -828,6 +897,17 @@ fn read_recent_log(path: &Path) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     Ok(bytes)
+}
+
+fn connect_session_socket(path: &Path) -> Option<UnixStream> {
+    if !path.exists() {
+        return None;
+    }
+
+    UnixStream::connect(path).ok().and_then(|stream| {
+        stream.set_nonblocking(true).ok()?;
+        Some(stream)
+    })
 }
 
 fn resolved_colors(
