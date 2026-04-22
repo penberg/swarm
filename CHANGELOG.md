@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-04-22
+
+### Added
+
+- Agent CI Docker image manifest. ([#62](https://github.com/penberg/swarm/pull/62))
+
+### Changed
+
+- Refactor session toolchain setup. ([#60](https://github.com/penberg/swarm/pull/60))
+
+### Fixed
+
+- Prevent UI terminal hangs under heavy logging. ([#63](https://github.com/penberg/swarm/pull/63))
+- Recover terminal after socket disconnect. ([#64](https://github.com/penberg/swarm/pull/64))
+
 ## [0.1.4] - 2026-04-10
 
 ### Changed
