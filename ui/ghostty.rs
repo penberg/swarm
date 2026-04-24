@@ -1110,7 +1110,13 @@ fn key_modifiers(
 fn encode_key(key: gdk::Key, modifiers: gdk::ModifierType) -> Vec<u8> {
     match key {
         gdk::Key::Return => vec![b'\r'],
-        gdk::Key::Tab => vec![b'\t'],
+        gdk::Key::Tab => {
+            if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+                b"\x1b[Z".to_vec()
+            } else {
+                vec![b'\t']
+            }
+        }
         gdk::Key::BackSpace => vec![0x7f],
         gdk::Key::Escape => vec![0x1b],
         gdk::Key::Up => b"\x1b[A".to_vec(),
