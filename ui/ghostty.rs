@@ -1110,8 +1110,10 @@ fn key_modifiers(
 fn encode_key(key: gdk::Key, modifiers: gdk::ModifierType) -> Vec<u8> {
     match key {
         gdk::Key::Return => vec![b'\r'],
-        gdk::Key::Tab => {
+        gdk::Key::Tab | gdk::Key::ISO_Left_Tab => {
             if modifiers.contains(gdk::ModifierType::SHIFT_MASK) {
+                b"\x1b[Z".to_vec()
+            } else if key == gdk::Key::ISO_Left_Tab {
                 b"\x1b[Z".to_vec()
             } else {
                 vec![b'\t']
@@ -1167,5 +1169,27 @@ fn encode_ctrl_char(ch: char) -> Option<u8> {
         '^' => Some(0x1e),
         '_' => Some(0x1f),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_key;
+    use gtk::gdk;
+
+    #[test]
+    fn encodes_shift_tab_from_tab_with_shift_modifier() {
+        assert_eq!(
+            encode_key(gdk::Key::Tab, gdk::ModifierType::SHIFT_MASK),
+            b"\x1b[Z"
+        );
+    }
+
+    #[test]
+    fn encodes_shift_tab_from_iso_left_tab_keysym() {
+        assert_eq!(
+            encode_key(gdk::Key::ISO_Left_Tab, gdk::ModifierType::empty()),
+            b"\x1b[Z"
+        );
     }
 }
