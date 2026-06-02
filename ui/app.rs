@@ -544,7 +544,7 @@ struct SidebarWidgets {
     container: GtkBox,
     add_repository_button: Button,
     repository_form: RepositoryFormWidgets,
-    list_host: GtkBox,
+    scroller: ScrolledWindow,
 }
 
 #[derive(Clone)]
@@ -1076,6 +1076,15 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     list_host.set_hexpand(true);
     list_host.set_vexpand(true);
 
+    // The scroller is created once and reused across sidebar rebuilds so its
+    // vertical adjustment (the scroll position) survives. Recreating it would
+    // reset scrolling to the top on every refresh.
+    let scroller = ScrolledWindow::new();
+    scroller.set_policy(PolicyType::Never, PolicyType::Automatic);
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+    list_host.append(&scroller);
+
     container.append(&toolbar);
     container.append(&repository_form.container);
     container.append(&list_host);
@@ -1084,7 +1093,7 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
         container,
         add_repository_button,
         repository_form,
-        list_host,
+        scroller,
     }
 }
 
@@ -1098,16 +1107,11 @@ fn render_sidebar_content(
 
     let groups_empty = groups.is_empty();
     sync_repository_form_widgets(state, groups_empty);
-
-    let scroller = ScrolledWindow::new();
-    scroller.set_policy(PolicyType::Never, PolicyType::Automatic);
-    scroller.set_hexpand(true);
-    scroller.set_vexpand(true);
+    let has_editing_workspace = state.editing_workspace.borrow().is_some();
 
     let list = ListBox::new();
     list.set_selection_mode(SelectionMode::Single);
     list.add_css_class("workspace-list");
-    scroller.set_child(Some(&list));
 
     let rows = Rc::new(RefCell::new(Vec::<WorkspaceRow>::new()));
 
@@ -1210,8 +1214,22 @@ fn render_sidebar_content(
         .as_ref()
         .cloned()
         .expect("sidebar widgets initialized");
-    clear_box(&sidebar_widgets.list_host);
-    sidebar_widgets.list_host.append(&scroller);
+
+    // Swap in the freshly built list while keeping the same scroller, so the
+    // scroll position is preserved across rebuilds. The vertical adjustment is
+    // re-applied after the new list has been laid out, since changing the child
+    // can momentarily clamp the value to zero before its height is known.
+    // Inline rename/create flows are handled by the entry grabbing focus, which
+    // should be allowed to reveal the active row instead of snapping back.
+    let scroller = sidebar_widgets.scroller.clone();
+    let saved_scroll = scroller.vadjustment().value();
+    scroller.set_child(Some(&list));
+    if !has_editing_workspace {
+        let vadjustment = scroller.vadjustment();
+        glib::idle_add_local_once(move || {
+            vadjustment.set_value(saved_scroll);
+        });
+    }
 }
 
 fn clear_branch_monitors(state: &Rc<AppState>) {
