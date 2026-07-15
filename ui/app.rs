@@ -482,7 +482,6 @@ fn build_ui(app: &Application) {
     let (pr_status_sender, pr_status_receiver) = mpsc::channel();
 
     let state = Rc::new(AppState {
-        sidebar_host: sidebar_host.clone(),
         sidebar_widgets: RefCell::new(None),
         detail_widgets: RefCell::new(None),
         workspace_groups: RefCell::new(Vec::new()),
@@ -521,7 +520,6 @@ fn build_ui(app: &Application) {
 }
 
 pub struct AppState {
-    sidebar_host: GtkBox,
     sidebar_widgets: RefCell<Option<SidebarWidgets>>,
     pub detail_widgets: RefCell<Option<DetailWidgets>>,
     pub workspace_groups: RefCell<Vec<WorkspaceGroup>>,
