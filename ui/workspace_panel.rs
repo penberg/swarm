@@ -1,7 +1,14 @@
 use gtk::{
     glib, prelude::*, Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack,
 };
-use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc, sync::mpsc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    path::Path,
+    rc::Rc,
+    sync::{mpsc, Arc, Mutex},
+    time::Duration,
+};
 use swarm::forges::github::{self, PullRequestStatus};
 
 use crate::{
@@ -23,7 +30,12 @@ pub struct DetailWidgets {
     session_toolbar_spacer: GtkBox,
     pub session_stack: Stack,
     terminal_cache: Rc<RefCell<HashMap<String, GtkBox>>>,
+    tracked_sessions: TrackedSessions,
 }
+
+/// Sessions whose foreground program the refresh worker polls, as
+/// `(session id, pid, fallback program)`.
+type TrackedSessions = Arc<Mutex<Vec<(String, Option<u32>, String)>>>;
 
 impl DetailWidgets {
     pub fn new(state: &Rc<AppState>) -> Self {
@@ -67,6 +79,9 @@ impl DetailWidgets {
         container.append(&session_toolbar);
         container.append(&session_stack);
 
+        let tracked_sessions: TrackedSessions = Arc::new(Mutex::new(Vec::new()));
+        install_session_program_refresh(&session_tabs, tracked_sessions.clone());
+
         Self {
             container,
             session_toolbar,
@@ -74,12 +89,14 @@ impl DetailWidgets {
             session_toolbar_spacer,
             session_stack,
             terminal_cache: Rc::new(RefCell::new(HashMap::new())),
+            tracked_sessions,
         }
     }
 
     pub fn render_empty(&self) {
         clear_box(&self.session_toolbar);
         clear_stack(&self.session_stack);
+        self.track_session_programs(&[]);
 
         let placeholder = build_no_workspace_placeholder();
         self.session_stack
@@ -135,6 +152,7 @@ impl DetailWidgets {
         }
 
         if workspace.sessions.is_empty() {
+            self.track_session_programs(&[]);
             let empty = build_empty_session_placeholder(state, workspace);
             self.session_stack
                 .add_titled(&empty, Some("empty"), "empty");
@@ -182,7 +200,25 @@ impl DetailWidgets {
             self.session_tabs.append(&tab);
         }
         sync_session_tab_active_state(&self.session_tabs, Some(&selected_session));
-        install_session_tab_refresh(&self.session_tabs, &workspace.sessions);
+        self.track_session_programs(&workspace.sessions);
+    }
+
+    fn track_session_programs(&self, sessions: &[SessionEntry]) {
+        let Ok(mut tracked) = self.tracked_sessions.lock() else {
+            return;
+        };
+
+        *tracked = sessions
+            .iter()
+            .map(|session| (session.id.clone(), session.pid, session.program.clone()))
+            .collect();
+    }
+
+    pub fn evict_terminals<'a>(&self, session_ids: impl IntoIterator<Item = &'a str>) {
+        let mut cache = self.terminal_cache.borrow_mut();
+        for session_id in session_ids {
+            cache.remove(session_id);
+        }
     }
 
     fn refresh_in_place(
@@ -556,17 +592,20 @@ fn build_session_tab(
     tab
 }
 
-fn install_session_tab_refresh(session_tabs: &GtkBox, sessions: &[SessionEntry]) {
+fn install_session_program_refresh(session_tabs: &GtkBox, tracked: TrackedSessions) {
     let session_tabs = session_tabs.downgrade();
-    let session_info: Vec<(String, Option<u32>, String)> = sessions
-        .iter()
-        .map(|s| (s.id.clone(), s.pid, s.program.clone()))
-        .collect();
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<(String, String)>>();
+    let (tx, rx) = mpsc::channel::<Vec<(String, String)>>();
 
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_secs(1));
-        let programs: Vec<(String, String)> = session_info
+        let Ok(sessions) = tracked.lock().map(|sessions| sessions.clone()) else {
+            break;
+        };
+        if sessions.is_empty() {
+            continue;
+        }
+
+        let programs: Vec<(String, String)> = sessions
             .iter()
             .map(|(id, pid, fallback)| {
                 let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
@@ -651,10 +690,7 @@ fn close_specific_session(
     match close_session(session_id) {
         Ok(_) => {
             if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
-                detail_widgets
-                    .terminal_cache
-                    .borrow_mut()
-                    .remove(session_id);
+                detail_widgets.evict_terminals([session_id]);
             }
             let preferred_session = next_selected.clone();
             let mut next_groups = current_groups(state);
