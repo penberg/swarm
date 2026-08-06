@@ -438,6 +438,45 @@ window {
   font-size: 13px;
 }
 
+.terminal-placeholder {
+  padding: 24px;
+}
+
+.terminal-placeholder-icon {
+  color: #55627a;
+  margin-bottom: 16px;
+}
+
+.terminal-placeholder-title {
+  color: #c3ccd9;
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.terminal-placeholder-subtitle {
+  color: #6f7887;
+  font-size: 12px;
+  margin-bottom: 20px;
+}
+
+.terminal-placeholder-action {
+  min-height: 32px;
+  padding: 0 18px;
+  background: rgba(126, 203, 255, 0.10);
+  color: #b6dcff;
+  border: 1px solid rgba(143, 202, 255, 0.28);
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.terminal-placeholder-action:hover {
+  background: rgba(126, 203, 255, 0.18);
+  color: #eaf5ff;
+  border-color: rgba(143, 202, 255, 0.5);
+}
+
 .terminal-host scrollbar {
   background: transparent;
   margin: 2px 4px 2px 0;
