@@ -1,4 +1,6 @@
-use gtk::{glib, prelude::*, Align, Box as GtkBox, Button, LinkButton, Orientation, Stack};
+use gtk::{
+    glib, prelude::*, Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack,
+};
 use std::{cell::RefCell, collections::HashMap, path::Path, rc::Rc, sync::mpsc, time::Duration};
 use swarm::forges::github::{self, PullRequestStatus};
 
@@ -78,6 +80,10 @@ impl DetailWidgets {
     pub fn render_empty(&self) {
         clear_box(&self.session_toolbar);
         clear_stack(&self.session_stack);
+
+        let placeholder = build_no_workspace_placeholder();
+        self.session_stack
+            .add_titled(&placeholder, Some("empty"), "empty");
     }
 
     pub fn render_workspace(
@@ -129,14 +135,7 @@ impl DetailWidgets {
         }
 
         if workspace.sessions.is_empty() {
-            let empty = ghostty::terminal_host(&SessionEntry {
-                id: "No sessions".to_string(),
-                pid: None,
-                program: "No sessions".to_string(),
-                status: "idle".to_string(),
-                log_path: String::new(),
-                socket_path: String::new(),
-            });
+            let empty = build_empty_session_placeholder(state, workspace);
             self.session_stack
                 .add_titled(&empty, Some("empty"), "empty");
             return;
@@ -256,6 +255,70 @@ impl DetailWidgets {
             WorkspacePrState::Loading => {}
         }
     }
+}
+
+fn build_placeholder(title: &str, subtitle: &str) -> GtkBox {
+    let container = GtkBox::new(Orientation::Vertical, 0);
+    container.set_hexpand(true);
+    container.set_vexpand(true);
+    container.set_halign(Align::Center);
+    container.set_valign(Align::Center);
+    container.add_css_class("terminal-placeholder");
+
+    let icon = Image::from_icon_name("utilities-terminal-symbolic");
+    icon.set_pixel_size(28);
+    icon.set_halign(Align::Center);
+    icon.add_css_class("terminal-placeholder-icon");
+
+    let title_label = Label::new(Some(title));
+    title_label.add_css_class("terminal-placeholder-title");
+
+    let subtitle_label = Label::new(Some(subtitle));
+    subtitle_label.add_css_class("terminal-placeholder-subtitle");
+
+    container.append(&icon);
+    container.append(&title_label);
+    container.append(&subtitle_label);
+    container
+}
+
+fn build_empty_session_placeholder(state: &Rc<AppState>, workspace: &WorkspaceEntry) -> GtkBox {
+    let label = if workspace.branch.is_empty() {
+        workspace.name.as_str()
+    } else {
+        workspace.branch.as_str()
+    };
+    let container = build_placeholder("No terminal open", &format!("Start a terminal in {label}."));
+
+    let new_terminal = Button::new();
+    new_terminal.set_halign(Align::Center);
+    new_terminal.add_css_class("terminal-placeholder-action");
+
+    let button_content = GtkBox::new(Orientation::Horizontal, 8);
+    button_content.set_halign(Align::Center);
+    let button_icon = Image::from_icon_name("utilities-terminal-symbolic");
+    button_icon.set_pixel_size(14);
+    button_content.append(&button_icon);
+    button_content.append(&Label::new(Some("New Terminal")));
+    new_terminal.set_child(Some(&button_content));
+
+    {
+        let state = state.clone();
+        let workspace_id = workspace_ref(workspace);
+        new_terminal.connect_clicked(move |_| {
+            create_and_select_session(&state, &workspace_id);
+        });
+    }
+
+    container.append(&new_terminal);
+    container
+}
+
+fn build_no_workspace_placeholder() -> GtkBox {
+    build_placeholder(
+        "No workspace selected",
+        "Pick a workspace in the sidebar to open a terminal.",
+    )
 }
 
 fn build_workspace_pr_link(status: &PullRequestStatus) -> Option<LinkButton> {
