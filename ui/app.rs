@@ -657,15 +657,18 @@ fn refresh_ui(
     preferred_workspace: Option<String>,
     preferred_session: Option<String>,
 ) {
-    let groups = match load_workspace_groups() {
-        Ok(groups) => groups,
-        Err(err) => {
-            eprintln!("failed to load workspaces: {err}");
-            return;
-        }
-    };
-    *state.workspace_groups.borrow_mut() = groups.clone();
-    render_ui(state, &groups, preferred_workspace, preferred_session);
+    let state = state.clone();
+    exec::dispatch(load_workspace_groups(), move |result| {
+        let groups = match result {
+            Ok(groups) => groups,
+            Err(err) => {
+                eprintln!("failed to load workspaces: {err}");
+                return;
+            }
+        };
+        *state.workspace_groups.borrow_mut() = groups.clone();
+        render_ui(&state, &groups, preferred_workspace, preferred_session);
+    });
 }
 
 fn render_ui(
@@ -704,10 +707,9 @@ fn schedule_refresh(
     preferred_workspace: Option<String>,
     preferred_session: Option<String>,
 ) {
-    let state = state.clone();
-    glib::idle_add_local_once(move || {
-        refresh_ui(&state, preferred_workspace, preferred_session);
-    });
+    // refresh_ui already defers: the load runs on the shared runtime and the
+    // apply lands on a later main-loop iteration, so no idle hop is needed.
+    refresh_ui(state, preferred_workspace, preferred_session);
 }
 
 pub fn current_groups(state: &Rc<AppState>) -> Vec<WorkspaceGroup> {

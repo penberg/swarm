@@ -4,7 +4,6 @@ use std::{
     process::Command,
     time::{Duration, SystemTime},
 };
-use crate::exec;
 use swarm::{
     SwarmError,
     repos::{Repository, RepositoryStore},
@@ -41,59 +40,53 @@ pub struct SessionEntry {
     pub socket_path: String,
 }
 
-pub fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let repos = repo_store.list().await?;
-        let mut groups = Vec::with_capacity(repos.len());
+pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let repos = repo_store.list().await?;
+    let mut groups = Vec::with_capacity(repos.len());
 
-        for repo in repos {
-            let repo_label = repo.alias.clone().unwrap_or_else(|| repo.name.clone());
-            let repo_canonical = repo.canonical();
-            let repo_status = repo_sync_status(&repo_store, &repo);
-            let workspaces = workspace_store.list(&repo_canonical).await?;
-            let workspaces = workspaces.into_iter().map(|workspace| async {
-                let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-                let sessions = session_store
-                    .list(Some(&workspace_ref))
-                    .await?
-                    .into_iter()
-                    .map(|session| SessionEntry {
-                        pid: session.pid,
-                        program: session_program(session.pid, &session.command),
-                        id: session.id,
-                        status: session.status,
-                        log_path: session.log_path.display().to_string(),
-                        socket_path: session.socket_path.display().to_string(),
-                    })
-                    .collect::<Vec<_>>();
+    for repo in repos {
+        let repo_label = repo.alias.clone().unwrap_or_else(|| repo.name.clone());
+        let repo_canonical = repo.canonical();
+        let repo_status = repo_sync_status(&repo_store, &repo);
+        let workspaces = workspace_store.list(&repo_canonical).await?;
+        let workspaces = workspaces.into_iter().map(|workspace| async {
+            let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+            let sessions = session_store
+                .list(Some(&workspace_ref))
+                .await?
+                .into_iter()
+                .map(|session| SessionEntry {
+                    pid: session.pid,
+                    program: session_program(session.pid, &session.command),
+                    id: session.id,
+                    status: session.status,
+                    log_path: session.log_path.display().to_string(),
+                    socket_path: session.socket_path.display().to_string(),
+                })
+                .collect::<Vec<_>>();
 
-                Ok::<WorkspaceEntry, SwarmError>(map_workspace(
-                    &repo_canonical,
-                    workspace,
-                    sessions,
-                ))
-            });
-            let mut workspace_entries = Vec::new();
-            for workspace in workspaces {
-                workspace_entries.push(workspace.await?);
-            }
-            let workspace_count = workspace_entries.len();
-
-            groups.push(WorkspaceGroup {
-                repo_label,
-                repo_canonical,
-                repo_status,
-                collapsed: repo.collapsed,
-                workspace_count,
-                workspaces: workspace_entries,
-            });
+            Ok::<WorkspaceEntry, SwarmError>(map_workspace(&repo_canonical, workspace, sessions))
+        });
+        let mut workspace_entries = Vec::new();
+        for workspace in workspaces {
+            workspace_entries.push(workspace.await?);
         }
+        let workspace_count = workspace_entries.len();
 
-        Ok(groups)
-    })
+        groups.push(WorkspaceGroup {
+            repo_label,
+            repo_canonical,
+            repo_status,
+            collapsed: repo.collapsed,
+            workspace_count,
+            workspaces: workspace_entries,
+        });
+    }
+
+    Ok(groups)
 }
 
 pub async fn create_workspace(
