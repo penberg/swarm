@@ -535,6 +535,7 @@ fn build_ui(app: &Application) {
         creating_pr_workspaces: RefCell::new(HashSet::new()),
         creating_session_workspaces: RefCell::new(HashSet::new()),
         closing_sessions: RefCell::new(HashSet::new()),
+        creating_workspaces: RefCell::new(HashSet::new()),
     });
 
     let sidebar_widgets = build_sidebar_widgets(&state);
@@ -572,6 +573,7 @@ pub struct AppState {
     pub(crate) creating_pr_workspaces: RefCell<HashSet<String>>,
     pub(crate) creating_session_workspaces: RefCell<HashSet<String>>,
     pub(crate) closing_sessions: RefCell<HashSet<String>>,
+    creating_workspaces: RefCell<HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -1513,8 +1515,8 @@ fn build_repo_row(
     {
         let state = state.clone();
         let repo_canonical = repo_canonical.to_string();
-        button.connect_clicked(move |_| {
-            create_and_edit_workspace(&state, &repo_canonical);
+        button.connect_clicked(move |button| {
+            create_and_edit_workspace(&state, &repo_canonical, button);
         });
     }
 
@@ -1605,8 +1607,8 @@ fn build_workspace_row(
     {
         let state = state.clone();
         let workspace = workspace.clone();
-        clone_button.connect_clicked(move |_| {
-            clone_and_edit_workspace(&state, &workspace);
+        clone_button.connect_clicked(move |button| {
+            clone_and_edit_workspace(&state, &workspace, button);
         });
     }
 
@@ -1757,58 +1759,88 @@ fn build_content(detail_container: GtkBox) -> GtkBox {
     content
 }
 
-fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str) {
-    match create_workspace(repo_canonical, None) {
-        Ok(workspace) => {
-            let workspace_ref = workspace_ref(&workspace);
-            let selected_session = workspace.sessions.first().map(|session| session.id.clone());
-            let preferred_session = selected_session.clone();
-            let mut next_groups = current_groups(state);
-            if let Some(group) = next_groups
-                .iter_mut()
-                .find(|group| group.repo_canonical == workspace.repo_canonical)
-            {
-                group.workspaces.push(workspace);
-                group.workspace_count = group.workspaces.len();
-            }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
-            *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
-            remember_selected_session(state, &workspace_ref, selected_session.as_deref());
-            schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
-        }
-        Err(err) => {
-            eprintln!("failed to create workspace: {err}");
-        }
+fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str, button: &Button) {
+    if !state
+        .creating_workspaces
+        .borrow_mut()
+        .insert(repo_canonical.to_string())
+    {
+        return;
     }
+    button.set_sensitive(false);
+
+    let state = state.clone();
+    let repo_canonical = repo_canonical.to_string();
+    let button = button.clone();
+    exec::dispatch(
+        create_workspace(repo_canonical.clone(), None),
+        move |result| {
+            state.creating_workspaces.borrow_mut().remove(&repo_canonical);
+            button.set_sensitive(true);
+            match result {
+                Ok(workspace) => {
+                    select_and_edit_new_workspace(&state, workspace);
+                }
+                Err(err) => {
+                    eprintln!("failed to create workspace: {err}");
+                }
+            }
+        },
+    );
 }
 
-fn clone_and_edit_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry) {
+fn clone_and_edit_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, button: &Button) {
     let source_workspace_ref = workspace_ref(workspace);
-    match clone_workspace(&source_workspace_ref, &workspace.name) {
-        Ok(workspace) => {
-            let workspace_ref = workspace_ref(&workspace);
-            let selected_session = workspace.sessions.first().map(|session| session.id.clone());
-            let preferred_session = selected_session.clone();
-            let mut next_groups = current_groups(state);
-            if let Some(group) = next_groups
-                .iter_mut()
-                .find(|group| group.repo_canonical == workspace.repo_canonical)
-            {
-                group.workspaces.push(workspace);
-                group.workspace_count = group.workspaces.len();
-            }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
-            *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
-            remember_selected_session(state, &workspace_ref, selected_session.as_deref());
-            schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
-        }
-        Err(err) => {
-            eprintln!("failed to clone workspace: {err}");
-            schedule_render_current_ui(state, Some(source_workspace_ref), None);
-        }
+    if !state
+        .creating_workspaces
+        .borrow_mut()
+        .insert(source_workspace_ref.clone())
+    {
+        return;
     }
+    button.set_sensitive(false);
+
+    let state = state.clone();
+    let button = button.clone();
+    let source_name = workspace.name.clone();
+    exec::dispatch(
+        clone_workspace(source_workspace_ref.clone(), source_name),
+        move |result| {
+            state
+                .creating_workspaces
+                .borrow_mut()
+                .remove(&source_workspace_ref);
+            button.set_sensitive(true);
+            match result {
+                Ok(workspace) => {
+                    select_and_edit_new_workspace(&state, workspace);
+                }
+                Err(err) => {
+                    eprintln!("failed to clone workspace: {err}");
+                    schedule_render_current_ui(&state, Some(source_workspace_ref.clone()), None);
+                }
+            }
+        },
+    );
+}
+
+fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry) {
+    let workspace_ref = workspace_ref(&workspace);
+    let selected_session = workspace.sessions.first().map(|session| session.id.clone());
+    let preferred_session = selected_session.clone();
+    let mut next_groups = current_groups(state);
+    if let Some(group) = next_groups
+        .iter_mut()
+        .find(|group| group.repo_canonical == workspace.repo_canonical)
+    {
+        group.workspaces.push(workspace);
+        group.workspace_count = group.workspaces.len();
+    }
+    *state.workspace_groups.borrow_mut() = next_groups.clone();
+    *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
+    *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
+    remember_selected_session(state, &workspace_ref, selected_session.as_deref());
+    schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
 }
 
 fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
