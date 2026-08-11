@@ -1,25 +1,25 @@
 use gtk::{
-    glib, prelude::*, Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack,
+    Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack, glib, prelude::*,
 };
 use std::{
     cell::RefCell,
     collections::HashMap,
     path::Path,
     rc::Rc,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 use swarm::forges::github::{self, PullRequestStatus};
 
 use crate::{
     app::{
-        clear_box, clear_workspace_pr_status, current_groups, preferred_session_for_workspace,
-        remember_selected_session, render_selected_workspace_detail, request_workspace_pr_status,
-        schedule_render_current_ui, workspace_pr_snapshot, workspace_ref, AppState,
-        WorkspacePrState,
+        AppState, CreatePrEligibility, WorkspacePrState, clear_box, clear_workspace_pr_status,
+        current_groups, preferred_session_for_workspace, remember_selected_session,
+        render_selected_workspace_detail, request_workspace_pr_status, schedule_render_current_ui,
+        workspace_pr_snapshot, workspace_ref,
     },
-    data::{close_session, create_session, foreground_program, SessionEntry, WorkspaceEntry},
-    ghostty,
+    data::{SessionEntry, WorkspaceEntry, close_session, create_session, foreground_program},
+    exec, ghostty,
 };
 
 #[derive(Clone)]
@@ -130,8 +130,8 @@ impl DetailWidgets {
         {
             let state = state.clone();
             let workspace_ref = workspace_ref(workspace);
-            add_button.connect_clicked(move |_| {
-                create_and_select_session(&state, &workspace_ref);
+            add_button.connect_clicked(move |button| {
+                create_and_select_session(&state, &workspace_ref, button);
             });
         }
         self.session_toolbar.append(&add_button);
@@ -143,8 +143,10 @@ impl DetailWidgets {
                     self.session_toolbar.append(&link);
                 }
             }
-            WorkspacePrState::None => {
-                if let Some(button) = build_workspace_create_pr_button(state, workspace) {
+            WorkspacePrState::None(eligibility) => {
+                if let Some(button) =
+                    build_workspace_create_pr_button(state, workspace, eligibility)
+                {
                     self.session_toolbar.append(&button);
                 }
             }
@@ -283,8 +285,10 @@ impl DetailWidgets {
                     self.session_toolbar.append(&link);
                 }
             }
-            WorkspacePrState::None => {
-                if let Some(button) = build_workspace_create_pr_button(state, workspace) {
+            WorkspacePrState::None(eligibility) => {
+                if let Some(button) =
+                    build_workspace_create_pr_button(state, workspace, eligibility)
+                {
                     self.session_toolbar.append(&button);
                 }
             }
@@ -341,8 +345,8 @@ fn build_empty_session_placeholder(state: &Rc<AppState>, workspace: &WorkspaceEn
     {
         let state = state.clone();
         let workspace_id = workspace_ref(workspace);
-        new_terminal.connect_clicked(move |_| {
-            create_and_select_session(&state, &workspace_id);
+        new_terminal.connect_clicked(move |button| {
+            create_and_select_session(&state, &workspace_id, button);
         });
     }
 
@@ -373,9 +377,9 @@ fn build_workspace_pr_link(status: &PullRequestStatus) -> Option<LinkButton> {
 fn build_workspace_create_pr_button(
     state: &Rc<AppState>,
     workspace: &WorkspaceEntry,
+    eligibility: CreatePrEligibility,
 ) -> Option<Button> {
-    let workspace_path = Path::new(&workspace.path);
-    if !github::is_github_workspace(workspace_path) {
+    if !eligibility.is_github {
         return None;
     }
 
@@ -384,7 +388,7 @@ fn build_workspace_create_pr_button(
         .creating_pr_workspaces
         .borrow()
         .contains(&workspace_id);
-    let commits_ahead = github::workspace_commits_ahead(workspace_path);
+    let commits_ahead = eligibility.commits_ahead;
 
     let (label, tooltip, enabled) = if in_flight {
         ("Creating PR…", "Creating pull request".to_string(), false)
@@ -446,59 +450,30 @@ fn start_pr_creation(state: &Rc<AppState>, workspace: &WorkspaceEntry) {
     }
 
     let workspace_path = workspace.path.clone();
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(github::create_pull_request(Path::new(&workspace_path)));
-    });
+    let state = state.clone();
+    let workspace = workspace.clone();
+    exec::dispatch_blocking(
+        move || github::create_pull_request(Path::new(&workspace_path)),
+        move |result| {
+            state
+                .creating_pr_workspaces
+                .borrow_mut()
+                .remove(&workspace_id);
 
-    let state_for_completion = state.clone();
-    let workspace_id_for_completion = workspace_id.clone();
-    let workspace_for_completion = workspace.clone();
-    glib::timeout_add_local(Duration::from_millis(50), move || {
-        match receiver.try_recv() {
-            Ok(result) => {
-                state_for_completion
-                    .creating_pr_workspaces
-                    .borrow_mut()
-                    .remove(&workspace_id_for_completion);
-
-                if let Err(err) = &result {
-                    eprintln!(
-                        "failed to create pull request for {workspace_id_for_completion}: {err}"
-                    );
-                }
-
-                clear_workspace_pr_status(&state_for_completion, &workspace_id_for_completion);
-                request_workspace_pr_status(&state_for_completion, &workspace_for_completion, true);
-
-                if let Some(selected) = state_for_completion.selected_workspace.borrow().clone() {
-                    if selected == workspace_id_for_completion {
-                        render_selected_workspace_detail(&state_for_completion, &selected, None);
-                    }
-                }
-
-                glib::ControlFlow::Break
+            if let Err(err) = result {
+                eprintln!("failed to create pull request for {workspace_id}: {err}");
             }
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                state_for_completion
-                    .creating_pr_workspaces
-                    .borrow_mut()
-                    .remove(&workspace_id_for_completion);
-                eprintln!(
-                    "failed to create pull request for {workspace_id_for_completion}: worker disconnected"
-                );
 
-                if let Some(selected) = state_for_completion.selected_workspace.borrow().clone() {
-                    if selected == workspace_id_for_completion {
-                        render_selected_workspace_detail(&state_for_completion, &selected, None);
-                    }
+            clear_workspace_pr_status(&state, &workspace_id);
+            request_workspace_pr_status(&state, &workspace, true);
+
+            if let Some(selected) = state.selected_workspace.borrow().clone() {
+                if selected == workspace_id {
+                    render_selected_workspace_detail(&state, &selected, None);
                 }
-
-                glib::ControlFlow::Break
             }
-        }
-    });
+        },
+    );
 }
 
 fn clear_stack(stack: &Stack) {
@@ -596,24 +571,26 @@ fn install_session_program_refresh(session_tabs: &GtkBox, tracked: TrackedSessio
     let session_tabs = session_tabs.downgrade();
     let (tx, rx) = mpsc::channel::<Vec<(String, String)>>();
 
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let Ok(sessions) = tracked.lock().map(|sessions| sessions.clone()) else {
-            break;
-        };
-        if sessions.is_empty() {
-            continue;
-        }
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let Ok(sessions) = tracked.lock().map(|sessions| sessions.clone()) else {
+                break;
+            };
+            if sessions.is_empty() {
+                continue;
+            }
 
-        let programs: Vec<(String, String)> = sessions
-            .iter()
-            .map(|(id, pid, fallback)| {
-                let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
-                (id.clone(), program)
-            })
-            .collect();
-        if tx.send(programs).is_err() {
-            break;
+            let programs: Vec<(String, String)> = sessions
+                .iter()
+                .map(|(id, pid, fallback)| {
+                    let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
+                    (id.clone(), program)
+                })
+                .collect();
+            if tx.send(programs).is_err() {
+                break;
+            }
         }
     });
 
@@ -651,29 +628,48 @@ fn sync_session_tab_labels(session_tabs: &GtkBox, programs: &[(String, String)])
     }
 }
 
-fn create_and_select_session(state: &Rc<AppState>, workspace_id: &str) {
-    match create_session(workspace_id) {
-        Ok(session) => {
-            let mut next_groups = current_groups(state);
-            for group in &mut next_groups {
-                if let Some(workspace) = group
-                    .workspaces
-                    .iter_mut()
-                    .find(|workspace| workspace_ref(workspace) == workspace_id)
-                {
-                    workspace.sessions.push(session.clone());
-                    break;
-                }
-            }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(workspace_id.to_string());
-            remember_selected_session(state, workspace_id, Some(&session.id));
-            schedule_render_current_ui(state, Some(workspace_id.to_string()), Some(session.id));
-        }
-        Err(err) => {
-            eprintln!("failed to create session: {err}");
-        }
+fn create_and_select_session(state: &Rc<AppState>, workspace_id: &str, button: &Button) {
+    if !state
+        .creating_session_workspaces
+        .borrow_mut()
+        .insert(workspace_id.to_string())
+    {
+        return;
     }
+    button.set_sensitive(false);
+
+    let state = state.clone();
+    let workspace_id = workspace_id.to_string();
+    let button = button.clone();
+    exec::dispatch(create_session(workspace_id.clone()), move |result| {
+        state
+            .creating_session_workspaces
+            .borrow_mut()
+            .remove(&workspace_id);
+        button.set_sensitive(true);
+        match result {
+            Ok(session) => {
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    if let Some(workspace) = group
+                        .workspaces
+                        .iter_mut()
+                        .find(|workspace| workspace_ref(workspace) == workspace_id)
+                    {
+                        workspace.sessions.push(session.clone());
+                        break;
+                    }
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.selected_workspace.borrow_mut() = Some(workspace_id.clone());
+                remember_selected_session(&state, &workspace_id, Some(&session.id));
+                schedule_render_current_ui(&state, Some(workspace_id.clone()), Some(session.id));
+            }
+            Err(err) => {
+                eprintln!("failed to create session: {err}");
+            }
+        }
+    });
 }
 
 fn close_specific_session(
@@ -682,37 +678,51 @@ fn close_specific_session(
     session_ids: &[String],
     session_id: &str,
 ) {
+    if !state
+        .closing_sessions
+        .borrow_mut()
+        .insert(session_id.to_string())
+    {
+        return;
+    }
+
     let next_selected = session_ids
         .iter()
         .find(|id| id.as_str() != session_id)
         .cloned();
 
-    match close_session(session_id) {
-        Ok(_) => {
-            if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
-                detail_widgets.evict_terminals([session_id]);
-            }
-            let preferred_session = next_selected.clone();
-            let mut next_groups = current_groups(state);
-            for group in &mut next_groups {
-                if let Some(workspace) = group
-                    .workspaces
-                    .iter_mut()
-                    .find(|workspace| workspace_ref(workspace) == workspace_id)
-                {
-                    workspace
-                        .sessions
-                        .retain(|session| session.id != session_id);
-                    break;
+    let state = state.clone();
+    let workspace_id = workspace_id.to_string();
+    let session_id = session_id.to_string();
+    exec::dispatch(close_session(session_id.clone()), move |result| {
+        state.closing_sessions.borrow_mut().remove(&session_id);
+        match result {
+            Ok(_) => {
+                if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
+                    detail_widgets.evict_terminals([session_id.as_str()]);
                 }
+                let preferred_session = next_selected.clone();
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    if let Some(workspace) = group
+                        .workspaces
+                        .iter_mut()
+                        .find(|workspace| workspace_ref(workspace) == workspace_id)
+                    {
+                        workspace
+                            .sessions
+                            .retain(|session| session.id != session_id);
+                        break;
+                    }
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.selected_workspace.borrow_mut() = Some(workspace_id.clone());
+                remember_selected_session(&state, &workspace_id, next_selected.as_deref());
+                schedule_render_current_ui(&state, Some(workspace_id.clone()), preferred_session);
             }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(workspace_id.to_string());
-            remember_selected_session(state, workspace_id, next_selected.as_deref());
-            schedule_render_current_ui(state, Some(workspace_id.to_string()), preferred_session);
+            Err(err) => {
+                eprintln!("failed to close session: {err}");
+            }
         }
-        Err(err) => {
-            eprintln!("failed to close session: {err}");
-        }
-    }
+    });
 }

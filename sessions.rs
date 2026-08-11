@@ -313,7 +313,7 @@ impl SessionStore {
                 )));
             }
 
-            std::thread::sleep(Duration::from_millis(50));
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
 

@@ -40,260 +40,233 @@ pub struct SessionEntry {
     pub socket_path: String,
 }
 
-pub fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let repos = repo_store.list().await?;
-        let mut groups = Vec::with_capacity(repos.len());
+pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let repos = repo_store.list().await?;
+    let mut groups = Vec::with_capacity(repos.len());
 
-        for repo in repos {
-            let repo_label = repo.alias.clone().unwrap_or_else(|| repo.name.clone());
-            let repo_canonical = repo.canonical();
-            let repo_status = repo_sync_status(&repo_store, &repo);
-            let workspaces = workspace_store.list(&repo_canonical).await?;
-            let workspaces = workspaces.into_iter().map(|workspace| async {
-                let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-                let sessions = session_store
-                    .list(Some(&workspace_ref))
-                    .await?
-                    .into_iter()
-                    .map(|session| SessionEntry {
-                        pid: session.pid,
-                        program: session_program(session.pid, &session.command),
-                        id: session.id,
-                        status: session.status,
-                        log_path: session.log_path.display().to_string(),
-                        socket_path: session.socket_path.display().to_string(),
-                    })
-                    .collect::<Vec<_>>();
+    for repo in repos {
+        let repo_label = repo.alias.clone().unwrap_or_else(|| repo.name.clone());
+        let repo_canonical = repo.canonical();
+        let repo_status = repo_sync_status(&repo_store, &repo);
+        let workspaces = workspace_store.list(&repo_canonical).await?;
+        let workspaces = workspaces.into_iter().map(|workspace| async {
+            let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+            let sessions = session_store
+                .list(Some(&workspace_ref))
+                .await?
+                .into_iter()
+                .map(|session| SessionEntry {
+                    pid: session.pid,
+                    program: command_program(&session.command),
+                    id: session.id,
+                    status: session.status,
+                    log_path: session.log_path.display().to_string(),
+                    socket_path: session.socket_path.display().to_string(),
+                })
+                .collect::<Vec<_>>();
 
-                Ok::<WorkspaceEntry, SwarmError>(map_workspace(
-                    &repo_canonical,
-                    workspace,
-                    sessions,
-                ))
-            });
-            let mut workspace_entries = Vec::new();
-            for workspace in workspaces {
-                workspace_entries.push(workspace.await?);
-            }
-            let workspace_count = workspace_entries.len();
-
-            groups.push(WorkspaceGroup {
-                repo_label,
-                repo_canonical,
-                repo_status,
-                collapsed: repo.collapsed,
-                workspace_count,
-                workspaces: workspace_entries,
-            });
+            Ok::<WorkspaceEntry, SwarmError>(map_workspace(&repo_canonical, workspace, sessions))
+        });
+        let mut workspace_entries = Vec::new();
+        for workspace in workspaces {
+            workspace_entries.push(workspace.await?);
         }
+        let workspace_count = workspace_entries.len();
 
-        Ok(groups)
-    })
+        groups.push(WorkspaceGroup {
+            repo_label,
+            repo_canonical,
+            repo_status,
+            collapsed: repo.collapsed,
+            workspace_count,
+            workspaces: workspace_entries,
+        });
+    }
+
+    Ok(groups)
 }
 
-pub fn create_workspace(
-    repository: &str,
-    name: Option<&str>,
+pub async fn create_workspace(
+    repository: String,
+    name: Option<String>,
 ) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let session_store = SessionStore::open().await?;
+    let repo_store = RepositoryStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let session_store = SessionStore::open().await?;
 
-        let repo = repo_store
-            .resolve_repository(repository)
-            .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
-        let workspace = workspace_store.create(repository, name).await?;
-        let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-        if let Err(err) = session_store
-            .create(&workspace_ref, &default_session_command())
-            .await
-        {
-            eprintln!("failed to create default session for {workspace_ref}: {err}");
-        }
-        let sessions = session_store
-            .list(Some(&workspace_ref))
-            .await?
-            .into_iter()
-            .map(|session| SessionEntry {
-                pid: session.pid,
-                program: session_program(session.pid, &session.command),
-                id: session.id,
-                status: session.status,
-                log_path: session.log_path.display().to_string(),
-                socket_path: session.socket_path.display().to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        Ok(map_workspace(&repo.canonical(), workspace, sessions))
-    })
-}
-
-pub fn add_repository(repository: &str, alias: Option<&str>) -> Result<Repository, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.add(repository, alias).await
-    })
-}
-
-pub fn sync_repository(repository: &str) -> Result<(), SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.sync(repository).await?;
-        Ok(())
-    })
-}
-
-pub fn collapse_repository(repository: &str) -> Result<(), SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.collapse(repository).await?;
-        Ok(())
-    })
-}
-
-pub fn expand_repository(repository: &str) -> Result<(), SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.expand(repository).await?;
-        Ok(())
-    })
-}
-
-pub fn rename_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let workspace = workspace_store.rename(workspace_ref, name).await?;
-        let repo = repo_store
-            .resolve_repository(&workspace.repository)
-            .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
-        let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-        let sessions = session_store
-            .list(Some(&workspace_ref))
-            .await?
-            .into_iter()
-            .map(|session| SessionEntry {
-                pid: session.pid,
-                program: session_program(session.pid, &session.command),
-                id: session.id,
-                status: session.status,
-                log_path: session.log_path.display().to_string(),
-                socket_path: session.socket_path.display().to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        Ok(map_workspace(&repo.canonical(), workspace, sessions))
-    })
-}
-
-pub fn clone_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let workspace = workspace_store.clone(workspace_ref, name).await?;
-        let repo = repo_store
-            .resolve_repository(&workspace.repository)
-            .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
-        let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-        if let Err(err) = session_store
-            .create(&workspace_ref, &default_session_command())
-            .await
-        {
-            eprintln!("failed to create default session for {workspace_ref}: {err}");
-        }
-        let sessions = session_store
-            .list(Some(&workspace_ref))
-            .await?
-            .into_iter()
-            .map(|session| SessionEntry {
-                pid: session.pid,
-                program: session_program(session.pid, &session.command),
-                id: session.id,
-                status: session.status,
-                log_path: session.log_path.display().to_string(),
-                socket_path: session.socket_path.display().to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        Ok(map_workspace(&repo.canonical(), workspace, sessions))
-    })
-}
-
-pub fn remove_workspace(workspace_ref: &str) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let sessions = session_store.list(Some(workspace_ref)).await?;
-
-        for session in sessions {
-            session_store.stop(&session.id).await?;
-            session_store.remove(&session.id).await?;
-        }
-
-        let workspace = workspace_store.remove(workspace_ref).await?;
-        let repo = repo_store
-            .resolve_repository(&workspace.repository)
-            .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
-
-        Ok(map_workspace(&repo.canonical(), workspace, Vec::new()))
-    })
-}
-
-pub fn create_session(workspace_ref: &str) -> Result<SessionEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let session_store = SessionStore::open().await?;
-        let session = session_store
-            .create(workspace_ref, &default_session_command())
-            .await?;
-
-        Ok(SessionEntry {
-            id: session.id,
+    let repo = repo_store
+        .resolve_repository(&repository)
+        .await?
+        .ok_or_else(|| SwarmError::RepositoryNotFound(repository.clone()))?;
+    let workspace = workspace_store.create(&repository, name.as_deref()).await?;
+    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+    if let Err(err) = session_store
+        .create(&workspace_ref, &default_session_command())
+        .await
+    {
+        eprintln!("failed to create default session for {workspace_ref}: {err}");
+    }
+    let sessions = session_store
+        .list(Some(&workspace_ref))
+        .await?
+        .into_iter()
+        .map(|session| SessionEntry {
             pid: session.pid,
-            program: session_program(session.pid, &session.command),
+            program: command_program(&session.command),
+            id: session.id,
             status: session.status,
             log_path: session.log_path.display().to_string(),
             socket_path: session.socket_path.display().to_string(),
         })
-    })
+        .collect::<Vec<_>>();
+
+    Ok(map_workspace(&repo.canonical(), workspace, sessions))
 }
 
-pub fn close_session(session_id: &str) -> Result<SessionEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
-        let session_store = SessionStore::open().await?;
-        session_store.stop(session_id).await?;
-        let session = session_store.remove(session_id).await?;
+pub async fn add_repository(
+    repository: String,
+    alias: Option<String>,
+) -> Result<Repository, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.add(&repository, alias.as_deref()).await
+}
 
-        Ok(SessionEntry {
-            id: session.id,
+pub async fn sync_repository(repository: String) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.sync(&repository).await?;
+    Ok(())
+}
+
+pub async fn set_repository_collapsed(
+    repository: String,
+    collapsed: bool,
+) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    if collapsed {
+        repo_store.collapse(&repository).await?;
+    } else {
+        repo_store.expand(&repository).await?;
+    }
+    Ok(())
+}
+
+pub async fn rename_workspace(
+    workspace_ref: String,
+    name: String,
+) -> Result<WorkspaceEntry, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let workspace = workspace_store.rename(&workspace_ref, &name).await?;
+    let repo = repo_store
+        .resolve_repository(&workspace.repository)
+        .await?
+        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+    let sessions = session_store
+        .list(Some(&workspace_ref))
+        .await?
+        .into_iter()
+        .map(|session| SessionEntry {
             pid: session.pid,
-            program: session_program(session.pid, &session.command),
+            program: command_program(&session.command),
+            id: session.id,
             status: session.status,
             log_path: session.log_path.display().to_string(),
             socket_path: session.socket_path.display().to_string(),
         })
+        .collect::<Vec<_>>();
+
+    Ok(map_workspace(&repo.canonical(), workspace, sessions))
+}
+
+pub async fn clone_workspace(
+    workspace_ref: String,
+    name: String,
+) -> Result<WorkspaceEntry, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let workspace = workspace_store.clone(&workspace_ref, &name).await?;
+    let repo = repo_store
+        .resolve_repository(&workspace.repository)
+        .await?
+        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+    if let Err(err) = session_store
+        .create(&workspace_ref, &default_session_command())
+        .await
+    {
+        eprintln!("failed to create default session for {workspace_ref}: {err}");
+    }
+    let sessions = session_store
+        .list(Some(&workspace_ref))
+        .await?
+        .into_iter()
+        .map(|session| SessionEntry {
+            pid: session.pid,
+            program: command_program(&session.command),
+            id: session.id,
+            status: session.status,
+            log_path: session.log_path.display().to_string(),
+            socket_path: session.socket_path.display().to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(map_workspace(&repo.canonical(), workspace, sessions))
+}
+
+pub async fn remove_workspace(workspace_ref: String) -> Result<WorkspaceEntry, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let sessions = session_store.list(Some(&workspace_ref)).await?;
+
+    for session in sessions {
+        session_store.stop(&session.id).await?;
+        session_store.remove(&session.id).await?;
+    }
+
+    let workspace = workspace_store.remove(&workspace_ref).await?;
+    let repo = repo_store
+        .resolve_repository(&workspace.repository)
+        .await?
+        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+
+    Ok(map_workspace(&repo.canonical(), workspace, Vec::new()))
+}
+
+pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, SwarmError> {
+    let session_store = SessionStore::open().await?;
+    let session = session_store
+        .create(&workspace_ref, &default_session_command())
+        .await?;
+
+    Ok(SessionEntry {
+        id: session.id,
+        pid: session.pid,
+        program: command_program(&session.command),
+        status: session.status,
+        log_path: session.log_path.display().to_string(),
+        socket_path: session.socket_path.display().to_string(),
+    })
+}
+
+pub async fn close_session(session_id: String) -> Result<SessionEntry, SwarmError> {
+    let session_store = SessionStore::open().await?;
+    session_store.stop(&session_id).await?;
+    let session = session_store.remove(&session_id).await?;
+
+    Ok(SessionEntry {
+        id: session.id,
+        pid: session.pid,
+        program: command_program(&session.command),
+        status: session.status,
+        log_path: session.log_path.display().to_string(),
+        socket_path: session.socket_path.display().to_string(),
     })
 }
 
@@ -307,8 +280,55 @@ pub fn current_workspace_branch(path: &str) -> Result<String, SwarmError> {
     run_git(path, ["rev-parse", "--short", "HEAD"])
 }
 
-pub fn current_workspace_head(path: &str) -> Result<String, SwarmError> {
-    run_git(Path::new(path), ["rev-parse", "HEAD"])
+/// Resolves the workspace's HEAD commit by reading git's files directly, so
+/// callers on the GTK main thread never pay for a subprocess. Handles detached
+/// HEAD, loose refs, packed refs, and linked worktrees (`commondir`).
+pub fn read_workspace_head(path: &str) -> Result<String, SwarmError> {
+    let head_path = workspace_head_path(path)?;
+    let git_dir = head_path
+        .parent()
+        .ok_or_else(|| SwarmError::Git(format!("no git dir for {path}")))?;
+    let head = fs::read_to_string(&head_path)?;
+    let head = head.trim();
+    let Some(ref_name) = head.strip_prefix("ref: ") else {
+        return Ok(head.to_string());
+    };
+
+    // Linked worktrees keep HEAD in their private git dir while refs live in
+    // the main repository's dir, pointed to by the `commondir` file.
+    let common_dir = match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(dir) => {
+            let dir = dir.trim();
+            if Path::new(dir).is_absolute() {
+                PathBuf::from(dir)
+            } else {
+                git_dir.join(dir)
+            }
+        }
+        Err(_) => git_dir.to_path_buf(),
+    };
+
+    if let Ok(sha) = fs::read_to_string(common_dir.join(ref_name)) {
+        return Ok(sha.trim().to_string());
+    }
+
+    let packed = fs::read_to_string(common_dir.join("packed-refs"))?;
+    packed_ref_target(&packed, ref_name)
+        .ok_or_else(|| SwarmError::Git(format!("unresolved ref {ref_name} for {path}")))
+}
+
+fn packed_ref_target(packed_refs: &str, ref_name: &str) -> Option<String> {
+    for line in packed_refs.lines() {
+        if line.starts_with('#') || line.starts_with('^') {
+            continue;
+        }
+        if let Some((sha, name)) = line.split_once(' ')
+            && name == ref_name
+        {
+            return Some(sha.to_string());
+        }
+    }
+    None
 }
 
 pub fn workspace_head_path(path: &str) -> Result<PathBuf, SwarmError> {
@@ -406,10 +426,6 @@ fn pluralize(value: u64, unit: &str) -> String {
     } else {
         format!("{value} {unit}s ago")
     }
-}
-
-fn session_program(pid: Option<u32>, command: &[String]) -> String {
-    foreground_program(pid).unwrap_or_else(|| command_program(command))
 }
 
 pub fn foreground_program(pid: Option<u32>) -> Option<String> {
@@ -584,4 +600,26 @@ fn render_git_failure(output: std::process::Output) -> String {
     }
 
     format!("exit status {}", output.status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::packed_ref_target;
+
+    #[test]
+    fn packed_ref_target_resolves_branches() {
+        let packed = "# pack-refs with: peeled fully-peeled sorted \n\
+            0123456789abcdef0123456789abcdef01234567 refs/heads/main\n\
+            89abcdef0123456789abcdef0123456789abcdef refs/heads/feature\n\
+            ^7777777777abcdef0123456789abcdef01234567\n";
+        assert_eq!(
+            packed_ref_target(packed, "refs/heads/feature").as_deref(),
+            Some("89abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            packed_ref_target(packed, "refs/heads/main").as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(packed_ref_target(packed, "refs/heads/missing"), None);
+    }
 }

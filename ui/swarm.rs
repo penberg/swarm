@@ -1,5 +1,6 @@
 mod app;
 mod data;
+mod exec;
 mod ghostty;
 mod workspace_panel;
 
