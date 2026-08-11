@@ -4,8 +4,9 @@ use gtk::{
     PopoverMenu, Scrollbar, gdk, gio, glib, pango, prelude::*,
 };
 use libghostty_vt::{
-    RenderState, Terminal, TerminalOptions, ffi,
+    RenderState, Terminal, TerminalOptions,
     render::{CellIterator, CursorVisualStyle, RowIterator},
+    screen::Screen,
     style::{RgbColor, Style},
     terminal::ScrollViewport,
 };
@@ -805,10 +806,7 @@ impl SessionTerminalState {
     }
 
     fn is_alternate_screen(&self) -> bool {
-        matches!(
-            self.terminal.active_screen(),
-            Ok(ffi::TerminalScreen::ALTERNATE)
-        )
+        matches!(self.terminal.active_screen(), Ok(Screen::Alternate))
     }
 
     fn handle_key(&mut self, key: gdk::Key, modifiers: gdk::ModifierType) {
