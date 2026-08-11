@@ -280,8 +280,55 @@ pub fn current_workspace_branch(path: &str) -> Result<String, SwarmError> {
     run_git(path, ["rev-parse", "--short", "HEAD"])
 }
 
-pub fn current_workspace_head(path: &str) -> Result<String, SwarmError> {
-    run_git(Path::new(path), ["rev-parse", "HEAD"])
+/// Resolves the workspace's HEAD commit by reading git's files directly, so
+/// callers on the GTK main thread never pay for a subprocess. Handles detached
+/// HEAD, loose refs, packed refs, and linked worktrees (`commondir`).
+pub fn read_workspace_head(path: &str) -> Result<String, SwarmError> {
+    let head_path = workspace_head_path(path)?;
+    let git_dir = head_path
+        .parent()
+        .ok_or_else(|| SwarmError::Git(format!("no git dir for {path}")))?;
+    let head = fs::read_to_string(&head_path)?;
+    let head = head.trim();
+    let Some(ref_name) = head.strip_prefix("ref: ") else {
+        return Ok(head.to_string());
+    };
+
+    // Linked worktrees keep HEAD in their private git dir while refs live in
+    // the main repository's dir, pointed to by the `commondir` file.
+    let common_dir = match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(dir) => {
+            let dir = dir.trim();
+            if Path::new(dir).is_absolute() {
+                PathBuf::from(dir)
+            } else {
+                git_dir.join(dir)
+            }
+        }
+        Err(_) => git_dir.to_path_buf(),
+    };
+
+    if let Ok(sha) = fs::read_to_string(common_dir.join(ref_name)) {
+        return Ok(sha.trim().to_string());
+    }
+
+    let packed = fs::read_to_string(common_dir.join("packed-refs"))?;
+    packed_ref_target(&packed, ref_name)
+        .ok_or_else(|| SwarmError::Git(format!("unresolved ref {ref_name} for {path}")))
+}
+
+fn packed_ref_target(packed_refs: &str, ref_name: &str) -> Option<String> {
+    for line in packed_refs.lines() {
+        if line.starts_with('#') || line.starts_with('^') {
+            continue;
+        }
+        if let Some((sha, name)) = line.split_once(' ')
+            && name == ref_name
+        {
+            return Some(sha.to_string());
+        }
+    }
+    None
 }
 
 pub fn workspace_head_path(path: &str) -> Result<PathBuf, SwarmError> {
@@ -553,4 +600,26 @@ fn render_git_failure(output: std::process::Output) -> String {
     }
 
     format!("exit status {}", output.status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::packed_ref_target;
+
+    #[test]
+    fn packed_ref_target_resolves_branches() {
+        let packed = "# pack-refs with: peeled fully-peeled sorted \n\
+            0123456789abcdef0123456789abcdef01234567 refs/heads/main\n\
+            89abcdef0123456789abcdef0123456789abcdef refs/heads/feature\n\
+            ^7777777777abcdef0123456789abcdef01234567\n";
+        assert_eq!(
+            packed_ref_target(packed, "refs/heads/feature").as_deref(),
+            Some("89abcdef0123456789abcdef0123456789abcdef")
+        );
+        assert_eq!(
+            packed_ref_target(packed, "refs/heads/main").as_deref(),
+            Some("0123456789abcdef0123456789abcdef01234567")
+        );
+        assert_eq!(packed_ref_target(packed, "refs/heads/missing"), None);
+    }
 }

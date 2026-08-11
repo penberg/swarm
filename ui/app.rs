@@ -20,7 +20,7 @@ use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 use crate::{
     data::{
         add_repository, clone_workspace, create_workspace, current_workspace_branch,
-        current_workspace_head, load_workspace_groups, remove_workspace, rename_workspace,
+        load_workspace_groups, read_workspace_head, remove_workspace, rename_workspace,
         set_repository_collapsed, sync_repository, workspace_head_path, WorkspaceEntry,
         WorkspaceGroup,
     },
@@ -907,7 +907,7 @@ fn pr_status_ttl(state: &WorkspacePrState, is_selected: bool) -> Duration {
 }
 
 fn workspace_pr_head_changed(cached: &CachedPrStatus, workspace: &WorkspaceEntry) -> bool {
-    let Ok(current_head) = current_workspace_head(&workspace.path) else {
+    let Ok(current_head) = read_workspace_head(&workspace.path) else {
         return false;
     };
 
@@ -944,7 +944,7 @@ pub(crate) fn request_workspace_pr_status(
     exec::dispatch_blocking(
         move || {
             let path = Path::new(&workspace_path);
-            let head = current_workspace_head(&workspace_path).ok();
+            let head = read_workspace_head(&workspace_path).ok();
             let status = github::workspace_pull_request_status(path);
             let eligibility = if status.is_none() {
                 let is_github = github::is_github_workspace(path);
