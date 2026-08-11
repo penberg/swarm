@@ -13,7 +13,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
     rc::Rc,
-    sync::mpsc,
     time::{Duration, Instant},
 };
 use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
@@ -519,7 +518,6 @@ fn build_ui(app: &Application) {
     let content_host = GtkBox::new(Orientation::Vertical, 0);
     content_host.set_hexpand(true);
     content_host.set_vexpand(true);
-    let (pr_status_sender, pr_status_receiver) = mpsc::channel();
 
     let state = Rc::new(AppState {
         sidebar_widgets: RefCell::new(None),
@@ -534,8 +532,6 @@ fn build_ui(app: &Application) {
         syncing_repositories: RefCell::new(HashSet::new()),
         pr_statuses: RefCell::new(HashMap::new()),
         pending_pr_lookups: RefCell::new(HashSet::new()),
-        pr_status_sender,
-        pr_status_receiver: RefCell::new(pr_status_receiver),
         creating_pr_workspaces: RefCell::new(HashSet::new()),
     });
 
@@ -552,7 +548,6 @@ fn build_ui(app: &Application) {
     window.set_child(Some(&shell));
 
     install_session_cycle_shortcuts(&window, &state);
-    install_pr_status_pump(&state);
     install_pr_status_scheduler(&state);
     refresh_ui(&state, None, None);
 
@@ -572,8 +567,6 @@ pub struct AppState {
     syncing_repositories: RefCell<HashSet<String>>,
     pr_statuses: RefCell<HashMap<String, CachedPrStatus>>,
     pending_pr_lookups: RefCell<HashSet<String>>,
-    pr_status_sender: mpsc::Sender<WorkspacePrUpdate>,
-    pr_status_receiver: RefCell<mpsc::Receiver<WorkspacePrUpdate>>,
     pub(crate) creating_pr_workspaces: RefCell<HashSet<String>>,
 }
 
@@ -649,12 +642,6 @@ pub enum WorkspacePrState {
     Loading,
     None,
     Ready(PullRequestStatus),
-}
-
-struct WorkspacePrUpdate {
-    workspace_ref: String,
-    status: Option<PullRequestStatus>,
-    head: Option<String>,
 }
 
 fn refresh_ui(
@@ -787,51 +774,6 @@ pub fn schedule_render_current_ui(
     let state = state.clone();
     glib::idle_add_local_once(move || {
         render_current_ui(&state, preferred_workspace, preferred_session);
-    });
-}
-
-fn install_pr_status_pump(state: &Rc<AppState>) {
-    let state = state.clone();
-    glib::timeout_add_local(Duration::from_millis(50), move || {
-        let mut changed = false;
-        let mut selected_workspace_changed = false;
-        let selected_workspace = state.selected_workspace.borrow().clone();
-        {
-            let receiver = state.pr_status_receiver.borrow_mut();
-            while let Ok(update) = receiver.try_recv() {
-                if selected_workspace.as_deref() == Some(update.workspace_ref.as_str()) {
-                    selected_workspace_changed = true;
-                }
-                state
-                    .pending_pr_lookups
-                    .borrow_mut()
-                    .remove(&update.workspace_ref);
-                state.pr_statuses.borrow_mut().insert(
-                    update.workspace_ref,
-                    CachedPrStatus {
-                        state: update
-                            .status
-                            .map(WorkspacePrState::Ready)
-                            .unwrap_or(WorkspacePrState::None),
-                        fetched_at: Instant::now(),
-                        head: update.head,
-                    },
-                );
-                changed = true;
-            }
-        }
-
-        if changed {
-            if selected_workspace_changed {
-                if let Some(selected_workspace) = selected_workspace.as_deref() {
-                    render_selected_workspace_detail(&state, selected_workspace, None);
-                }
-            } else if !state.repository_form.borrow().expanded {
-                render_sidebar_only(&state);
-            }
-        }
-
-        glib::ControlFlow::Continue
     });
 }
 
@@ -979,17 +921,48 @@ pub(crate) fn request_workspace_pr_status(
         );
     }
 
-    let sender = state.pr_status_sender.clone();
     let workspace_path = workspace.path.clone();
-    std::thread::spawn(move || {
-        let head = current_workspace_head(&workspace_path).ok();
-        let status = github::workspace_pull_request_status(Path::new(&workspace_path));
-        let _ = sender.send(WorkspacePrUpdate {
-            workspace_ref: workspace_id,
-            status,
+    let state = state.clone();
+    exec::dispatch_blocking(
+        move || {
+            let head = current_workspace_head(&workspace_path).ok();
+            let status = github::workspace_pull_request_status(Path::new(&workspace_path));
+            (status, head)
+        },
+        move |(status, head)| {
+            apply_workspace_pr_update(&state, workspace_id, status, head);
+        },
+    );
+}
+
+fn apply_workspace_pr_update(
+    state: &Rc<AppState>,
+    workspace_ref: String,
+    status: Option<PullRequestStatus>,
+    head: Option<String>,
+) {
+    let selected_workspace = state.selected_workspace.borrow().clone();
+    let selected_workspace_changed =
+        selected_workspace.as_deref() == Some(workspace_ref.as_str());
+    state.pending_pr_lookups.borrow_mut().remove(&workspace_ref);
+    state.pr_statuses.borrow_mut().insert(
+        workspace_ref,
+        CachedPrStatus {
+            state: status
+                .map(WorkspacePrState::Ready)
+                .unwrap_or(WorkspacePrState::None),
+            fetched_at: Instant::now(),
             head,
-        });
-    });
+        },
+    );
+
+    if selected_workspace_changed {
+        if let Some(selected_workspace) = selected_workspace.as_deref() {
+            render_selected_workspace_detail(state, selected_workspace, None);
+        }
+    } else if !state.repository_form.borrow().expanded {
+        render_sidebar_only(state);
+    }
 }
 
 pub(crate) fn clear_workspace_pr_status(state: &Rc<AppState>, workspace_ref: &str) {
