@@ -93,13 +93,15 @@ pub fn terminal_host(session: &SessionEntry) -> GtkBox {
     );
     state.borrow_mut().refresh_view();
 
-    install_draw_func(&area, state.clone());
-    install_key_controller(&area, state.clone());
-    install_scroll_controller(&area, state.clone());
-    install_focus_controller(&area, state.clone());
-    install_drag_controller(&area, state.clone());
-    install_context_menu(&area, state.clone());
-    install_scrollbar_sync(&adjustment, state.clone());
+    install_draw_func(&area, &state);
+    install_key_controller(&area, &state);
+    install_scroll_controller(&area, &state);
+    install_focus_controller(&area, &state);
+    install_drag_controller(&area, &state);
+    install_context_menu(&area, &state);
+    install_scrollbar_sync(&adjustment, &state);
+    // The socket pump owns the only strong reference: the widget closures below
+    // hold weak ones, so the terminal is freed once its widget is dropped.
     install_socket_pump(state);
 
     {
@@ -111,8 +113,12 @@ pub fn terminal_host(session: &SessionEntry) -> GtkBox {
     container
 }
 
-fn install_draw_func(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_draw_func(area: &DrawingArea, state: &Rc<RefCell<SessionTerminalState>>) {
+    let state = Rc::downgrade(state);
     area.set_draw_func(move |_area, cr, width, height| {
+        let Some(state) = state.upgrade() else {
+            return;
+        };
         if let Ok(mut state) = state.try_borrow_mut() {
             state.draw(cr, width, height);
         }
@@ -131,14 +137,17 @@ fn install_socket_pump(state: Rc<RefCell<SessionTerminalState>>) {
     });
 }
 
-fn install_key_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_key_controller(area: &DrawingArea, state: &Rc<RefCell<SessionTerminalState>>) {
     let controller = EventControllerKey::new();
     let im_context = IMMulticontext::new();
     im_context.set_client_widget(Some(area));
     im_context.set_use_preedit(false);
     {
-        let state = state.clone();
+        let state = Rc::downgrade(state);
         im_context.connect_commit(move |_context, text| {
+            let Some(state) = state.upgrade() else {
+                return;
+            };
             if let Ok(mut state) = state.try_borrow_mut() {
                 state.send_text(text);
             }
@@ -146,7 +155,12 @@ fn install_key_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalS
     }
     controller.set_im_context(Some(&im_context));
     let area_for_clipboard = area.clone();
+    let state = Rc::downgrade(state);
     controller.connect_key_pressed(move |controller, key, _keycode, modifiers| {
+        let Some(state) = state.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
+
         if is_paste_shortcut(key, modifiers) {
             paste_from_clipboard(&area_for_clipboard, state.clone(), false);
             return glib::Propagation::Stop;
@@ -170,7 +184,7 @@ fn install_key_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalS
     area.add_controller(controller);
 }
 
-fn install_context_menu(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_context_menu(area: &DrawingArea, state: &Rc<RefCell<SessionTerminalState>>) {
     let menu = gio::Menu::new();
     menu.append(Some("Copy"), Some("term.copy"));
     menu.append(Some("Paste"), Some("term.paste"));
@@ -184,8 +198,11 @@ fn install_context_menu(area: &DrawingArea, state: Rc<RefCell<SessionTerminalSta
     let copy_action = gio::SimpleAction::new("copy", None);
     {
         let area = area.clone();
-        let state = state.clone();
+        let state = Rc::downgrade(state);
         copy_action.connect_activate(move |_, _| {
+            let Some(state) = state.upgrade() else {
+                return;
+            };
             if let Ok(mut s) = state.try_borrow_mut() {
                 if let Some(text) = s.copy_selection_text() {
                     area.clipboard().set_text(&text);
@@ -198,9 +215,12 @@ fn install_context_menu(area: &DrawingArea, state: Rc<RefCell<SessionTerminalSta
     let paste_action = gio::SimpleAction::new("paste", None);
     {
         let area = area.clone();
-        let state = state.clone();
+        let state = Rc::downgrade(state);
         paste_action.connect_activate(move |_, _| {
-            paste_from_clipboard(&area, state.clone(), false);
+            let Some(state) = state.upgrade() else {
+                return;
+            };
+            paste_from_clipboard(&area, state, false);
         });
     }
     action_group.add_action(&paste_action);
@@ -226,23 +246,37 @@ fn install_context_menu(area: &DrawingArea, state: Rc<RefCell<SessionTerminalSta
         });
     }
     area.add_controller(gesture);
+
+    // GTK4 requires popovers to be unparented before their parent is finalized.
+    {
+        let popover = popover.clone();
+        area.connect_destroy(move |_| {
+            popover.unparent();
+        });
+    }
 }
 
-fn install_drag_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_drag_controller(area: &DrawingArea, state: &Rc<RefCell<SessionTerminalState>>) {
     let drag = GestureDrag::new();
     drag.set_button(gdk::BUTTON_PRIMARY);
     {
-        let state = state.clone();
+        let state = Rc::downgrade(state);
         drag.connect_drag_begin(move |_drag, x, y| {
+            let Some(state) = state.upgrade() else {
+                return;
+            };
             if let Ok(mut s) = state.try_borrow_mut() {
                 s.begin_selection(x, y);
             }
         });
     }
     {
-        let state = state.clone();
+        let state = Rc::downgrade(state);
         drag.connect_drag_update(move |drag, dx, dy| {
             let Some((sx, sy)) = drag.start_point() else {
+                return;
+            };
+            let Some(state) = state.upgrade() else {
                 return;
             };
             if let Ok(mut s) = state.try_borrow_mut() {
@@ -252,8 +286,12 @@ fn install_drag_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminal
     }
     {
         let area = area.clone();
+        let state = Rc::downgrade(state);
         drag.connect_drag_end(move |drag, dx, dy| {
             let Some((sx, sy)) = drag.start_point() else {
+                return;
+            };
+            let Some(state) = state.upgrade() else {
                 return;
             };
             let text_opt = if let Ok(mut s) = state.try_borrow_mut() {
@@ -270,9 +308,13 @@ fn install_drag_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminal
     area.add_controller(drag);
 }
 
-fn install_scroll_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_scroll_controller(area: &DrawingArea, state: &Rc<RefCell<SessionTerminalState>>) {
     let controller = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
+    let state = Rc::downgrade(state);
     controller.connect_scroll(move |_controller, _dx, dy| {
+        let Some(state) = state.upgrade() else {
+            return glib::Propagation::Proceed;
+        };
         if let Ok(mut state) = state.try_borrow_mut() {
             state.scroll_by_delta(dy);
         }
@@ -281,23 +323,30 @@ fn install_scroll_controller(area: &DrawingArea, state: Rc<RefCell<SessionTermin
     area.add_controller(controller);
 }
 
-fn install_scrollbar_sync(adjustment: &Adjustment, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_scrollbar_sync(adjustment: &Adjustment, state: &Rc<RefCell<SessionTerminalState>>) {
+    let state = Rc::downgrade(state);
     adjustment.connect_value_changed(move |adjustment| {
+        let Some(state) = state.upgrade() else {
+            return;
+        };
         if let Ok(mut state) = state.try_borrow_mut() {
             state.handle_adjustment_change(adjustment.value().round() as u64);
         }
     });
 }
 
-fn install_focus_controller(area: &DrawingArea, state: Rc<RefCell<SessionTerminalState>>) {
+fn install_focus_controller(area: &DrawingArea, state: &Rc<RefCell<SessionTerminalState>>) {
     let controller = GestureClick::new();
     {
         let area = area.clone();
-        let state = state.clone();
+        let state = Rc::downgrade(state);
         controller.connect_pressed(move |gesture, _n_press, _x, _y| {
             area.grab_focus();
             if gesture.current_button() == 2 {
-                paste_from_clipboard(&area, state.clone(), true);
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                paste_from_clipboard(&area, state, true);
             }
         });
     }

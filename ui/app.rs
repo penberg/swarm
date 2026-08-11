@@ -2043,6 +2043,16 @@ fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry) {
     let removed_workspace_ref = workspace_ref(workspace);
     match remove_workspace(&removed_workspace_ref) {
         Ok(_) => {
+            // Drop the cached terminals of the removed sessions, otherwise their
+            // widgets stay alive and keep polling a socket that is already gone.
+            if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
+                detail_widgets.evict_terminals(
+                    workspace
+                        .sessions
+                        .iter()
+                        .map(|session| session.id.as_str()),
+                );
+            }
             clear_workspace_pr_status(state, &removed_workspace_ref);
             let mut next_groups = state.workspace_groups.borrow().clone();
             for group in &mut next_groups {
