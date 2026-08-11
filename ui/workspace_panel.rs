@@ -1,24 +1,24 @@
 use gtk::{
-    glib, prelude::*, Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack,
+    Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack, glib, prelude::*,
 };
 use std::{
     cell::RefCell,
     collections::HashMap,
     path::Path,
     rc::Rc,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 use swarm::forges::github::{self, PullRequestStatus};
 
 use crate::{
     app::{
-        clear_box, clear_workspace_pr_status, current_groups, preferred_session_for_workspace,
-        remember_selected_session, render_selected_workspace_detail, request_workspace_pr_status,
-        schedule_render_current_ui, workspace_pr_snapshot, workspace_ref, AppState,
-        CreatePrEligibility, WorkspacePrState,
+        AppState, CreatePrEligibility, WorkspacePrState, clear_box, clear_workspace_pr_status,
+        current_groups, preferred_session_for_workspace, remember_selected_session,
+        render_selected_workspace_detail, request_workspace_pr_status, schedule_render_current_ui,
+        workspace_pr_snapshot, workspace_ref,
     },
-    data::{close_session, create_session, foreground_program, SessionEntry, WorkspaceEntry},
+    data::{SessionEntry, WorkspaceEntry, close_session, create_session, foreground_program},
     exec, ghostty,
 };
 
@@ -144,7 +144,8 @@ impl DetailWidgets {
                 }
             }
             WorkspacePrState::None(eligibility) => {
-                if let Some(button) = build_workspace_create_pr_button(state, workspace, eligibility)
+                if let Some(button) =
+                    build_workspace_create_pr_button(state, workspace, eligibility)
                 {
                     self.session_toolbar.append(&button);
                 }
@@ -285,7 +286,8 @@ impl DetailWidgets {
                 }
             }
             WorkspacePrState::None(eligibility) => {
-                if let Some(button) = build_workspace_create_pr_button(state, workspace, eligibility)
+                if let Some(button) =
+                    build_workspace_create_pr_button(state, workspace, eligibility)
                 {
                     self.session_toolbar.append(&button);
                 }
@@ -569,24 +571,26 @@ fn install_session_program_refresh(session_tabs: &GtkBox, tracked: TrackedSessio
     let session_tabs = session_tabs.downgrade();
     let (tx, rx) = mpsc::channel::<Vec<(String, String)>>();
 
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
-        let Ok(sessions) = tracked.lock().map(|sessions| sessions.clone()) else {
-            break;
-        };
-        if sessions.is_empty() {
-            continue;
-        }
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let Ok(sessions) = tracked.lock().map(|sessions| sessions.clone()) else {
+                break;
+            };
+            if sessions.is_empty() {
+                continue;
+            }
 
-        let programs: Vec<(String, String)> = sessions
-            .iter()
-            .map(|(id, pid, fallback)| {
-                let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
-                (id.clone(), program)
-            })
-            .collect();
-        if tx.send(programs).is_err() {
-            break;
+            let programs: Vec<(String, String)> = sessions
+                .iter()
+                .map(|(id, pid, fallback)| {
+                    let program = foreground_program(*pid).unwrap_or_else(|| fallback.clone());
+                    (id.clone(), program)
+                })
+                .collect();
+            if tx.send(programs).is_err() {
+                break;
+            }
         }
     });
 

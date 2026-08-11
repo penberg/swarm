@@ -1,12 +1,11 @@
 use gtk::{
-    gdk,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
+    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
+    Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow,
+    SelectionMode, Spinner, Widget, gdk,
     gio::{self, FileMonitor, FileMonitorFlags},
     glib,
     prelude::*,
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
-    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
-    Orientation, PolicyType, PropagationPhase, ScrolledWindow, SelectionMode, Spinner, Widget,
-    STYLE_PROVIDER_PRIORITY_APPLICATION,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -19,10 +18,9 @@ use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 
 use crate::{
     data::{
-        add_repository, clone_workspace, create_workspace, current_workspace_branch,
-        load_workspace_groups, read_workspace_head, remove_workspace, rename_workspace,
-        set_repository_collapsed, sync_repository, workspace_head_path, WorkspaceEntry,
-        WorkspaceGroup,
+        WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, create_workspace,
+        current_workspace_branch, load_workspace_groups, read_workspace_head, remove_workspace,
+        rename_workspace, set_repository_collapsed, sync_repository, workspace_head_path,
     },
     exec,
     workspace_panel::DetailWidgets,
@@ -973,8 +971,7 @@ fn apply_workspace_pr_update(
     eligibility: CreatePrEligibility,
 ) {
     let selected_workspace = state.selected_workspace.borrow().clone();
-    let selected_workspace_changed =
-        selected_workspace.as_deref() == Some(workspace_ref.as_str());
+    let selected_workspace_changed = selected_workspace.as_deref() == Some(workspace_ref.as_str());
     state.pending_pr_lookups.borrow_mut().remove(&workspace_ref);
     state.pr_statuses.borrow_mut().insert(
         workspace_ref,
@@ -1756,17 +1753,25 @@ fn install_branch_monitor(state: &Rc<AppState>, workspace: &WorkspaceEntry, bran
     let monitor_state = state.clone();
     let workspace_ref = workspace_ref(workspace);
     let workspace_path = workspace.path.clone();
-    monitor.connect_changed(
-        move |_, _, _, _| match current_workspace_branch(&workspace_path) {
-            Ok(branch) => {
-                clear_workspace_pr_status(&monitor_state, &workspace_ref);
-                update_cached_workspace_branch(&monitor_state, &workspace_ref, &branch);
-                label.set_text(&branch);
-                schedule_background_sidebar_refresh(&monitor_state);
-            }
-            Err(err) => eprintln!("failed to refresh branch for {workspace_path}: {err}"),
-        },
-    );
+    monitor.connect_changed(move |_, _, _, _| {
+        let state = monitor_state.clone();
+        let workspace_ref = workspace_ref.clone();
+        let label = label.clone();
+        let workspace_path = workspace_path.clone();
+        let read_path = workspace_path.clone();
+        exec::dispatch_blocking(
+            move || current_workspace_branch(&read_path),
+            move |result| match result {
+                Ok(branch) => {
+                    clear_workspace_pr_status(&state, &workspace_ref);
+                    update_cached_workspace_branch(&state, &workspace_ref, &branch);
+                    label.set_text(&branch);
+                    schedule_background_sidebar_refresh(&state);
+                }
+                Err(err) => eprintln!("failed to refresh branch for {workspace_path}: {err}"),
+            },
+        );
+    });
 
     state.branch_monitors.borrow_mut().push(monitor);
 }
@@ -1800,7 +1805,10 @@ fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str, button:
     exec::dispatch(
         create_workspace(repo_canonical.clone(), None),
         move |result| {
-            state.creating_workspaces.borrow_mut().remove(&repo_canonical);
+            state
+                .creating_workspaces
+                .borrow_mut()
+                .remove(&repo_canonical);
             button.set_sensitive(true);
             match result {
                 Ok(workspace) => {
@@ -2027,7 +2035,11 @@ fn commit_workspace_rename(state: &Rc<AppState>, current_workspace_ref: &str, ne
                     .selected_sessions
                     .borrow_mut()
                     .remove(&current_workspace_ref);
-                remember_selected_session(&state, &next_workspace_ref, remembered_session.as_deref());
+                remember_selected_session(
+                    &state,
+                    &next_workspace_ref,
+                    remembered_session.as_deref(),
+                );
                 schedule_render_current_ui(&state, Some(next_workspace_ref), None);
             }
             Err(err) => {
@@ -2067,10 +2079,7 @@ fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, b
                     // widgets stay alive and keep polling a socket that is already gone.
                     if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
                         detail_widgets.evict_terminals(
-                            workspace
-                                .sessions
-                                .iter()
-                                .map(|session| session.id.as_str()),
+                            workspace.sessions.iter().map(|session| session.id.as_str()),
                         );
                     }
                     clear_workspace_pr_status(&state, &removed_workspace_ref);
