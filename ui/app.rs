@@ -648,8 +648,16 @@ struct CachedPrStatus {
 #[derive(Clone)]
 pub enum WorkspacePrState {
     Loading,
-    None,
+    None(CreatePrEligibility),
     Ready(PullRequestStatus),
+}
+
+/// Whether the workspace can offer a "Create PR" button, resolved in the
+/// background PR status lookup so rendering never runs git.
+#[derive(Clone, Copy, Default)]
+pub struct CreatePrEligibility {
+    pub is_github: bool,
+    pub commits_ahead: Option<u32>,
 }
 
 fn refresh_ui(
@@ -887,7 +895,7 @@ fn pr_status_ttl(state: &WorkspacePrState, is_selected: bool) -> Duration {
 
     match state {
         WorkspacePrState::Loading => LOADING_PR_STATUS_TTL,
-        WorkspacePrState::None => NO_PR_STATUS_TTL,
+        WorkspacePrState::None(_) => NO_PR_STATUS_TTL,
         WorkspacePrState::Ready(status) => match status.state {
             PullRequestStatusState::Pending => PENDING_PR_STATUS_TTL,
             PullRequestStatusState::Success | PullRequestStatusState::Failure => {
@@ -935,12 +943,24 @@ pub(crate) fn request_workspace_pr_status(
     let state = state.clone();
     exec::dispatch_blocking(
         move || {
+            let path = Path::new(&workspace_path);
             let head = current_workspace_head(&workspace_path).ok();
-            let status = github::workspace_pull_request_status(Path::new(&workspace_path));
-            (status, head)
+            let status = github::workspace_pull_request_status(path);
+            let eligibility = if status.is_none() {
+                let is_github = github::is_github_workspace(path);
+                CreatePrEligibility {
+                    is_github,
+                    commits_ahead: is_github
+                        .then(|| github::workspace_commits_ahead(path))
+                        .flatten(),
+                }
+            } else {
+                CreatePrEligibility::default()
+            };
+            (status, head, eligibility)
         },
-        move |(status, head)| {
-            apply_workspace_pr_update(&state, workspace_id, status, head);
+        move |(status, head, eligibility)| {
+            apply_workspace_pr_update(&state, workspace_id, status, head, eligibility);
         },
     );
 }
@@ -950,6 +970,7 @@ fn apply_workspace_pr_update(
     workspace_ref: String,
     status: Option<PullRequestStatus>,
     head: Option<String>,
+    eligibility: CreatePrEligibility,
 ) {
     let selected_workspace = state.selected_workspace.borrow().clone();
     let selected_workspace_changed =
@@ -960,7 +981,7 @@ fn apply_workspace_pr_update(
         CachedPrStatus {
             state: status
                 .map(WorkspacePrState::Ready)
-                .unwrap_or(WorkspacePrState::None),
+                .unwrap_or(WorkspacePrState::None(eligibility)),
             fetched_at: Instant::now(),
             head,
         },
@@ -1690,7 +1711,7 @@ fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceE
         WorkspacePrState::Loading => {
             indicator.set_tooltip_text(Some("Loading pull request status..."));
         }
-        WorkspacePrState::None => {
+        WorkspacePrState::None(_) => {
             indicator.set_tooltip_text(Some("No pull request"));
         }
         WorkspacePrState::Ready(status) => {

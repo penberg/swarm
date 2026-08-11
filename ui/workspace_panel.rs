@@ -16,7 +16,7 @@ use crate::{
         clear_box, clear_workspace_pr_status, current_groups, preferred_session_for_workspace,
         remember_selected_session, render_selected_workspace_detail, request_workspace_pr_status,
         schedule_render_current_ui, workspace_pr_snapshot, workspace_ref, AppState,
-        WorkspacePrState,
+        CreatePrEligibility, WorkspacePrState,
     },
     data::{close_session, create_session, foreground_program, SessionEntry, WorkspaceEntry},
     exec, ghostty,
@@ -143,8 +143,9 @@ impl DetailWidgets {
                     self.session_toolbar.append(&link);
                 }
             }
-            WorkspacePrState::None => {
-                if let Some(button) = build_workspace_create_pr_button(state, workspace) {
+            WorkspacePrState::None(eligibility) => {
+                if let Some(button) = build_workspace_create_pr_button(state, workspace, eligibility)
+                {
                     self.session_toolbar.append(&button);
                 }
             }
@@ -283,8 +284,9 @@ impl DetailWidgets {
                     self.session_toolbar.append(&link);
                 }
             }
-            WorkspacePrState::None => {
-                if let Some(button) = build_workspace_create_pr_button(state, workspace) {
+            WorkspacePrState::None(eligibility) => {
+                if let Some(button) = build_workspace_create_pr_button(state, workspace, eligibility)
+                {
                     self.session_toolbar.append(&button);
                 }
             }
@@ -373,9 +375,9 @@ fn build_workspace_pr_link(status: &PullRequestStatus) -> Option<LinkButton> {
 fn build_workspace_create_pr_button(
     state: &Rc<AppState>,
     workspace: &WorkspaceEntry,
+    eligibility: CreatePrEligibility,
 ) -> Option<Button> {
-    let workspace_path = Path::new(&workspace.path);
-    if !github::is_github_workspace(workspace_path) {
+    if !eligibility.is_github {
         return None;
     }
 
@@ -384,7 +386,7 @@ fn build_workspace_create_pr_button(
         .creating_pr_workspaces
         .borrow()
         .contains(&workspace_id);
-    let commits_ahead = github::workspace_commits_ahead(workspace_path);
+    let commits_ahead = eligibility.commits_ahead;
 
     let (label, tooltip, enabled) = if in_flight {
         ("Creating PR…", "Creating pull request".to_string(), false)
