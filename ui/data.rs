@@ -133,11 +133,12 @@ pub async fn create_workspace(
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
 }
 
-pub fn add_repository(repository: &str, alias: Option<&str>) -> Result<Repository, SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.add(repository, alias).await
-    })
+pub async fn add_repository(
+    repository: String,
+    alias: Option<String>,
+) -> Result<Repository, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.add(&repository, alias.as_deref()).await
 }
 
 pub async fn sync_repository(repository: String) -> Result<(), SwarmError> {
@@ -146,49 +147,47 @@ pub async fn sync_repository(repository: String) -> Result<(), SwarmError> {
     Ok(())
 }
 
-pub fn collapse_repository(repository: &str) -> Result<(), SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.collapse(repository).await?;
-        Ok(())
-    })
+pub async fn set_repository_collapsed(
+    repository: String,
+    collapsed: bool,
+) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    if collapsed {
+        repo_store.collapse(&repository).await?;
+    } else {
+        repo_store.expand(&repository).await?;
+    }
+    Ok(())
 }
 
-pub fn expand_repository(repository: &str) -> Result<(), SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.expand(repository).await?;
-        Ok(())
-    })
-}
+pub async fn rename_workspace(
+    workspace_ref: String,
+    name: String,
+) -> Result<WorkspaceEntry, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let workspace = workspace_store.rename(&workspace_ref, &name).await?;
+    let repo = repo_store
+        .resolve_repository(&workspace.repository)
+        .await?
+        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+    let sessions = session_store
+        .list(Some(&workspace_ref))
+        .await?
+        .into_iter()
+        .map(|session| SessionEntry {
+            pid: session.pid,
+            program: session_program(session.pid, &session.command),
+            id: session.id,
+            status: session.status,
+            log_path: session.log_path.display().to_string(),
+            socket_path: session.socket_path.display().to_string(),
+        })
+        .collect::<Vec<_>>();
 
-pub fn rename_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntry, SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let workspace = workspace_store.rename(workspace_ref, name).await?;
-        let repo = repo_store
-            .resolve_repository(&workspace.repository)
-            .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
-        let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-        let sessions = session_store
-            .list(Some(&workspace_ref))
-            .await?
-            .into_iter()
-            .map(|session| SessionEntry {
-                pid: session.pid,
-                program: session_program(session.pid, &session.command),
-                id: session.id,
-                status: session.status,
-                log_path: session.log_path.display().to_string(),
-                socket_path: session.socket_path.display().to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        Ok(map_workspace(&repo.canonical(), workspace, sessions))
-    })
+    Ok(map_workspace(&repo.canonical(), workspace, sessions))
 }
 
 pub async fn clone_workspace(
@@ -227,26 +226,24 @@ pub async fn clone_workspace(
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
 }
 
-pub fn remove_workspace(workspace_ref: &str) -> Result<WorkspaceEntry, SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        let session_store = SessionStore::open().await?;
-        let workspace_store = WorkspaceStore::open().await?;
-        let sessions = session_store.list(Some(workspace_ref)).await?;
+pub async fn remove_workspace(workspace_ref: String) -> Result<WorkspaceEntry, SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    let session_store = SessionStore::open().await?;
+    let workspace_store = WorkspaceStore::open().await?;
+    let sessions = session_store.list(Some(&workspace_ref)).await?;
 
-        for session in sessions {
-            session_store.stop(&session.id).await?;
-            session_store.remove(&session.id).await?;
-        }
+    for session in sessions {
+        session_store.stop(&session.id).await?;
+        session_store.remove(&session.id).await?;
+    }
 
-        let workspace = workspace_store.remove(workspace_ref).await?;
-        let repo = repo_store
-            .resolve_repository(&workspace.repository)
-            .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+    let workspace = workspace_store.remove(&workspace_ref).await?;
+    let repo = repo_store
+        .resolve_repository(&workspace.repository)
+        .await?
+        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
 
-        Ok(map_workspace(&repo.canonical(), workspace, Vec::new()))
-    })
+    Ok(map_workspace(&repo.canonical(), workspace, Vec::new()))
 }
 
 pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, SwarmError> {

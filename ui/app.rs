@@ -19,9 +19,9 @@ use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 
 use crate::{
     data::{
-        add_repository, clone_workspace, collapse_repository, create_workspace,
-        current_workspace_branch, current_workspace_head, expand_repository, load_workspace_groups,
-        remove_workspace, rename_workspace, sync_repository, workspace_head_path, WorkspaceEntry,
+        add_repository, clone_workspace, create_workspace, current_workspace_branch,
+        current_workspace_head, load_workspace_groups, remove_workspace, rename_workspace,
+        set_repository_collapsed, sync_repository, workspace_head_path, WorkspaceEntry,
         WorkspaceGroup,
     },
     exec,
@@ -536,6 +536,7 @@ fn build_ui(app: &Application) {
         creating_session_workspaces: RefCell::new(HashSet::new()),
         closing_sessions: RefCell::new(HashSet::new()),
         creating_workspaces: RefCell::new(HashSet::new()),
+        removing_workspaces: RefCell::new(HashSet::new()),
     });
 
     let sidebar_widgets = build_sidebar_widgets(&state);
@@ -574,6 +575,7 @@ pub struct AppState {
     pub(crate) creating_session_workspaces: RefCell<HashSet<String>>,
     pub(crate) closing_sessions: RefCell<HashSet<String>>,
     creating_workspaces: RefCell<HashSet<String>>,
+    removing_workspaces: RefCell<HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -1628,8 +1630,8 @@ fn build_workspace_row(
     {
         let state = state.clone();
         let workspace = workspace.clone();
-        delete_button.connect_clicked(move |_| {
-            remove_selected_workspace(&state, &workspace);
+        delete_button.connect_clicked(move |button| {
+            remove_selected_workspace(&state, &workspace, button);
         });
     }
 
@@ -1875,32 +1877,31 @@ fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
 }
 
 fn toggle_repo_collapsed_and_refresh(state: &Rc<AppState>, repo_canonical: &str, collapsed: bool) {
-    let result = if collapsed {
-        expand_repository(repo_canonical)
-    } else {
-        collapse_repository(repo_canonical)
-    };
-
-    match result {
-        Ok(()) => {
-            let mut next_groups = current_groups(state);
-            if let Some(group) = next_groups
-                .iter_mut()
-                .find(|group| group.repo_canonical == repo_canonical)
-            {
-                group.collapsed = !collapsed;
+    let state = state.clone();
+    let repo_canonical = repo_canonical.to_string();
+    exec::dispatch(
+        set_repository_collapsed(repo_canonical.clone(), !collapsed),
+        move |result| match result {
+            Ok(()) => {
+                let mut next_groups = current_groups(&state);
+                if let Some(group) = next_groups
+                    .iter_mut()
+                    .find(|group| group.repo_canonical == repo_canonical)
+                {
+                    group.collapsed = !collapsed;
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.editing_workspace.borrow_mut() = None;
+                *state.selected_session.borrow_mut() = None;
+                schedule_render_current_ui(&state, None, None);
             }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.editing_workspace.borrow_mut() = None;
-            *state.selected_session.borrow_mut() = None;
-            schedule_render_current_ui(state, None, None);
-        }
-        Err(err) => {
-            eprintln!("failed to toggle repository collapse: {err}");
-            let preferred_workspace = state.selected_workspace.borrow().clone();
-            schedule_render_current_ui(state, preferred_workspace, None);
-        }
-    }
+            Err(err) => {
+                eprintln!("failed to toggle repository collapse: {err}");
+                let preferred_workspace = state.selected_workspace.borrow().clone();
+                schedule_render_current_ui(&state, preferred_workspace, None);
+            }
+        },
+    );
 }
 
 fn sidebar_append_static_row<W: IsA<Widget>>(list: &ListBox, widget: &W) {
@@ -1967,7 +1968,7 @@ fn install_workspace_rename_handlers(
 }
 
 fn commit_workspace_rename(state: &Rc<AppState>, current_workspace_ref: &str, next_name: &str) {
-    let next_name = next_name.trim();
+    let next_name = next_name.trim().to_string();
     *state.editing_workspace.borrow_mut() = None;
 
     if next_name.is_empty() {
@@ -1975,88 +1976,115 @@ fn commit_workspace_rename(state: &Rc<AppState>, current_workspace_ref: &str, ne
         return;
     }
 
-    match rename_workspace(current_workspace_ref, next_name) {
-        Ok(workspace) => {
-            let next_workspace_ref = workspace_ref(&workspace);
-            clear_workspace_pr_status(state, current_workspace_ref);
-            let mut next_groups = current_groups(state);
-            for group in &mut next_groups {
-                if group.repo_canonical != workspace.repo_canonical {
-                    continue;
+    let state = state.clone();
+    let current_workspace_ref = current_workspace_ref.to_string();
+    exec::dispatch(
+        rename_workspace(current_workspace_ref.clone(), next_name),
+        move |result| match result {
+            Ok(workspace) => {
+                let next_workspace_ref = workspace_ref(&workspace);
+                clear_workspace_pr_status(&state, &current_workspace_ref);
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    if group.repo_canonical != workspace.repo_canonical {
+                        continue;
+                    }
+                    if let Some(candidate) = group
+                        .workspaces
+                        .iter_mut()
+                        .find(|candidate| workspace_ref(candidate) == current_workspace_ref)
+                    {
+                        *candidate = workspace;
+                        break;
+                    }
                 }
-                if let Some(candidate) = group
-                    .workspaces
-                    .iter_mut()
-                    .find(|candidate| workspace_ref(candidate) == current_workspace_ref)
-                {
-                    *candidate = workspace;
-                    break;
-                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.selected_workspace.borrow_mut() = Some(next_workspace_ref.clone());
+                let remembered_session = state
+                    .selected_sessions
+                    .borrow_mut()
+                    .remove(&current_workspace_ref);
+                remember_selected_session(&state, &next_workspace_ref, remembered_session.as_deref());
+                schedule_render_current_ui(&state, Some(next_workspace_ref), None);
             }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(next_workspace_ref.clone());
-            let remembered_session = state
-                .selected_sessions
-                .borrow_mut()
-                .remove(current_workspace_ref);
-            remember_selected_session(state, &next_workspace_ref, remembered_session.as_deref());
-            schedule_render_current_ui(state, Some(next_workspace_ref), None);
-        }
-        Err(err) => {
-            eprintln!("failed to rename workspace: {err}");
-            *state.editing_workspace.borrow_mut() = Some(current_workspace_ref.to_string());
-            schedule_render_current_ui(state, Some(current_workspace_ref.to_string()), None);
-        }
-    }
+            Err(err) => {
+                eprintln!("failed to rename workspace: {err}");
+                *state.editing_workspace.borrow_mut() = Some(current_workspace_ref.clone());
+                schedule_render_current_ui(&state, Some(current_workspace_ref.clone()), None);
+            }
+        },
+    );
 }
 
-fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry) {
+fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, button: &Button) {
     let removed_workspace_ref = workspace_ref(workspace);
-    match remove_workspace(&removed_workspace_ref) {
-        Ok(_) => {
-            // Drop the cached terminals of the removed sessions, otherwise their
-            // widgets stay alive and keep polling a socket that is already gone.
-            if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
-                detail_widgets.evict_terminals(
-                    workspace
-                        .sessions
-                        .iter()
-                        .map(|session| session.id.as_str()),
-                );
-            }
-            clear_workspace_pr_status(state, &removed_workspace_ref);
-            let mut next_groups = state.workspace_groups.borrow().clone();
-            for group in &mut next_groups {
-                group
-                    .workspaces
-                    .retain(|candidate| workspace_ref(candidate) != removed_workspace_ref);
-                group.workspace_count = group.workspaces.len();
-            }
+    if !state
+        .removing_workspaces
+        .borrow_mut()
+        .insert(removed_workspace_ref.clone())
+    {
+        return;
+    }
+    button.set_sensitive(false);
 
-            let next_workspace = state
-                .selected_workspace
-                .borrow()
-                .clone()
-                .filter(|selected| selected != &removed_workspace_ref)
-                .or_else(|| {
-                    first_workspace(&next_groups).map(|workspace| workspace_ref(&workspace))
-                });
-
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = next_workspace.clone();
-            *state.editing_workspace.borrow_mut() = None;
+    let state = state.clone();
+    let button = button.clone();
+    let workspace = workspace.clone();
+    exec::dispatch(
+        remove_workspace(removed_workspace_ref.clone()),
+        move |result| {
             state
-                .selected_sessions
+                .removing_workspaces
                 .borrow_mut()
                 .remove(&removed_workspace_ref);
-            *state.selected_session.borrow_mut() = None;
-            schedule_render_current_ui(state, next_workspace, None);
-        }
-        Err(err) => {
-            eprintln!("failed to remove workspace: {err}");
-            schedule_refresh(state, Some(removed_workspace_ref), None);
-        }
-    }
+            button.set_sensitive(true);
+            match result {
+                Ok(_) => {
+                    // Drop the cached terminals of the removed sessions, otherwise their
+                    // widgets stay alive and keep polling a socket that is already gone.
+                    if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
+                        detail_widgets.evict_terminals(
+                            workspace
+                                .sessions
+                                .iter()
+                                .map(|session| session.id.as_str()),
+                        );
+                    }
+                    clear_workspace_pr_status(&state, &removed_workspace_ref);
+                    let mut next_groups = state.workspace_groups.borrow().clone();
+                    for group in &mut next_groups {
+                        group
+                            .workspaces
+                            .retain(|candidate| workspace_ref(candidate) != removed_workspace_ref);
+                        group.workspace_count = group.workspaces.len();
+                    }
+
+                    let next_workspace = state
+                        .selected_workspace
+                        .borrow()
+                        .clone()
+                        .filter(|selected| selected != &removed_workspace_ref)
+                        .or_else(|| {
+                            first_workspace(&next_groups).map(|workspace| workspace_ref(&workspace))
+                        });
+
+                    *state.workspace_groups.borrow_mut() = next_groups.clone();
+                    *state.selected_workspace.borrow_mut() = next_workspace.clone();
+                    *state.editing_workspace.borrow_mut() = None;
+                    state
+                        .selected_sessions
+                        .borrow_mut()
+                        .remove(&removed_workspace_ref);
+                    *state.selected_session.borrow_mut() = None;
+                    schedule_render_current_ui(&state, next_workspace, None);
+                }
+                Err(err) => {
+                    eprintln!("failed to remove workspace: {err}");
+                    schedule_refresh(&state, Some(removed_workspace_ref.clone()), None);
+                }
+            }
+        },
+    );
 }
 
 fn submit_repository_form(state: &Rc<AppState>, repository_entry: &Entry, alias_entry: &Entry) {
@@ -2076,20 +2104,24 @@ fn submit_repository_form(state: &Rc<AppState>, repository_entry: &Entry, alias_
         form.error = None;
     }
 
-    let alias = (!alias_text.is_empty()).then_some(alias_text.as_str());
+    let alias = (!alias_text.is_empty()).then_some(alias_text.clone());
     let preferred_workspace = state.selected_workspace.borrow().clone();
 
-    match add_repository(&repository, alias) {
-        Ok(_) => {
-            *state.repository_form.borrow_mut() = RepositoryFormState::default();
-            schedule_refresh(state, preferred_workspace, None);
-        }
-        Err(err) => {
-            state.repository_form.borrow_mut().error = Some(err.to_string());
-            sync_repository_form_widgets(state, false);
-            focus_repository_form_field(state);
-        }
-    }
+    let state = state.clone();
+    exec::dispatch(
+        add_repository(repository, alias),
+        move |result| match result {
+            Ok(_) => {
+                *state.repository_form.borrow_mut() = RepositoryFormState::default();
+                schedule_refresh(&state, preferred_workspace, None);
+            }
+            Err(err) => {
+                state.repository_form.borrow_mut().error = Some(err.to_string());
+                sync_repository_form_widgets(&state, false);
+                focus_repository_form_field(&state);
+            }
+        },
+    );
 }
 
 struct WorkspaceRow {
