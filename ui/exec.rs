@@ -24,3 +24,19 @@ where
         }
     });
 }
+
+/// Like [`dispatch`], for synchronous work (subprocesses, filesystem walks)
+/// that would otherwise pin a runtime worker thread.
+pub fn dispatch_blocking<T, Work, Done>(work: Work, on_done: Done)
+where
+    T: Send + 'static,
+    Work: FnOnce() -> T + Send + 'static,
+    Done: FnOnce(T) + 'static,
+{
+    let handle = runtime().spawn_blocking(work);
+    glib::spawn_future_local(async move {
+        if let Ok(result) = handle.await {
+            on_done(result);
+        }
+    });
+}

@@ -19,7 +19,7 @@ use crate::{
         WorkspacePrState,
     },
     data::{close_session, create_session, foreground_program, SessionEntry, WorkspaceEntry},
-    ghostty,
+    exec, ghostty,
 };
 
 #[derive(Clone)]
@@ -446,59 +446,30 @@ fn start_pr_creation(state: &Rc<AppState>, workspace: &WorkspaceEntry) {
     }
 
     let workspace_path = workspace.path.clone();
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = sender.send(github::create_pull_request(Path::new(&workspace_path)));
-    });
+    let state = state.clone();
+    let workspace = workspace.clone();
+    exec::dispatch_blocking(
+        move || github::create_pull_request(Path::new(&workspace_path)),
+        move |result| {
+            state
+                .creating_pr_workspaces
+                .borrow_mut()
+                .remove(&workspace_id);
 
-    let state_for_completion = state.clone();
-    let workspace_id_for_completion = workspace_id.clone();
-    let workspace_for_completion = workspace.clone();
-    glib::timeout_add_local(Duration::from_millis(50), move || {
-        match receiver.try_recv() {
-            Ok(result) => {
-                state_for_completion
-                    .creating_pr_workspaces
-                    .borrow_mut()
-                    .remove(&workspace_id_for_completion);
-
-                if let Err(err) = &result {
-                    eprintln!(
-                        "failed to create pull request for {workspace_id_for_completion}: {err}"
-                    );
-                }
-
-                clear_workspace_pr_status(&state_for_completion, &workspace_id_for_completion);
-                request_workspace_pr_status(&state_for_completion, &workspace_for_completion, true);
-
-                if let Some(selected) = state_for_completion.selected_workspace.borrow().clone() {
-                    if selected == workspace_id_for_completion {
-                        render_selected_workspace_detail(&state_for_completion, &selected, None);
-                    }
-                }
-
-                glib::ControlFlow::Break
+            if let Err(err) = result {
+                eprintln!("failed to create pull request for {workspace_id}: {err}");
             }
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                state_for_completion
-                    .creating_pr_workspaces
-                    .borrow_mut()
-                    .remove(&workspace_id_for_completion);
-                eprintln!(
-                    "failed to create pull request for {workspace_id_for_completion}: worker disconnected"
-                );
 
-                if let Some(selected) = state_for_completion.selected_workspace.borrow().clone() {
-                    if selected == workspace_id_for_completion {
-                        render_selected_workspace_detail(&state_for_completion, &selected, None);
-                    }
+            clear_workspace_pr_status(&state, &workspace_id);
+            request_workspace_pr_status(&state, &workspace, true);
+
+            if let Some(selected) = state.selected_workspace.borrow().clone() {
+                if selected == workspace_id {
+                    render_selected_workspace_detail(&state, &selected, None);
                 }
-
-                glib::ControlFlow::Break
             }
-        }
-    });
+        },
+    );
 }
 
 fn clear_stack(stack: &Stack) {
