@@ -11,7 +11,6 @@ pub fn runtime() -> &'static Runtime {
 /// Runs `work` on the shared runtime and delivers its result to `on_done` on
 /// the GTK main thread. Must be called from the main thread. If the work
 /// panics, `on_done` is never called.
-#[expect(dead_code, reason = "call sites arrive with the dispatch conversions")]
 pub fn dispatch<T, Fut, Done>(work: Fut, on_done: Done)
 where
     T: Send + 'static,

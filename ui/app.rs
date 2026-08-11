@@ -25,6 +25,7 @@ use crate::{
         remove_workspace, rename_workspace, sync_repository, workspace_head_path, WorkspaceEntry,
         WorkspaceGroup,
     },
+    exec,
     workspace_panel::DetailWidgets,
 };
 
@@ -1851,55 +1852,16 @@ fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
         preferred_session.clone(),
     );
 
-    let (sender, receiver) = mpsc::channel();
-    {
-        let repo_canonical = repo_canonical.clone();
-        std::thread::spawn(move || {
-            let _ = sender.send(sync_repository(&repo_canonical));
-        });
-    }
-
     let state = state.clone();
-    glib::timeout_add_local(Duration::from_millis(50), move || {
-        match receiver.try_recv() {
-            Ok(result) => {
-                state
-                    .syncing_repositories
-                    .borrow_mut()
-                    .remove(&repo_canonical);
-                match result {
-                    Ok(()) => {
-                        schedule_refresh(
-                            &state,
-                            preferred_workspace.clone(),
-                            preferred_session.clone(),
-                        );
-                    }
-                    Err(err) => {
-                        eprintln!("failed to sync repository: {err}");
-                        schedule_refresh(
-                            &state,
-                            preferred_workspace.clone(),
-                            preferred_session.clone(),
-                        );
-                    }
-                }
-                glib::ControlFlow::Break
-            }
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => {
-                state
-                    .syncing_repositories
-                    .borrow_mut()
-                    .remove(&repo_canonical);
-                schedule_refresh(
-                    &state,
-                    preferred_workspace.clone(),
-                    preferred_session.clone(),
-                );
-                glib::ControlFlow::Break
-            }
+    exec::dispatch(sync_repository(repo_canonical.clone()), move |result| {
+        state
+            .syncing_repositories
+            .borrow_mut()
+            .remove(&repo_canonical);
+        if let Err(err) = result {
+            eprintln!("failed to sync repository: {err}");
         }
+        schedule_refresh(&state, preferred_workspace, preferred_session);
     });
 }
 

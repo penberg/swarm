@@ -142,12 +142,10 @@ pub fn add_repository(repository: &str, alias: Option<&str>) -> Result<Repositor
     })
 }
 
-pub fn sync_repository(repository: &str) -> Result<(), SwarmError> {
-    exec::runtime().block_on(async {
-        let repo_store = RepositoryStore::open().await?;
-        repo_store.sync(repository).await?;
-        Ok(())
-    })
+pub async fn sync_repository(repository: String) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.sync(&repository).await?;
+    Ok(())
 }
 
 pub fn collapse_repository(repository: &str) -> Result<(), SwarmError> {
