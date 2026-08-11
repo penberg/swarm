@@ -21,6 +21,7 @@ github-build-setup = "github-build-setup.yml"
 [dist.dependencies.apt]
 "gcc" = "*"
 "g++" = "*"
+"libc++-dev" = "*"
 "libcairo2-dev" = "*"
 "libglib2.0-dev" = "*"
 "libgtk-4-dev" = "*"
