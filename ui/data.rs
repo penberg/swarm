@@ -4,6 +4,7 @@ use std::{
     process::Command,
     time::{Duration, SystemTime},
 };
+use crate::exec;
 use swarm::{
     SwarmError,
     repos::{Repository, RepositoryStore},
@@ -41,8 +42,7 @@ pub struct SessionEntry {
 }
 
 pub fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         let workspace_store = WorkspaceStore::open().await?;
         let session_store = SessionStore::open().await?;
@@ -100,8 +100,7 @@ pub fn create_workspace(
     repository: &str,
     name: Option<&str>,
 ) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         let workspace_store = WorkspaceStore::open().await?;
         let session_store = SessionStore::open().await?;
@@ -137,16 +136,14 @@ pub fn create_workspace(
 }
 
 pub fn add_repository(repository: &str, alias: Option<&str>) -> Result<Repository, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         repo_store.add(repository, alias).await
     })
 }
 
 pub fn sync_repository(repository: &str) -> Result<(), SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         repo_store.sync(repository).await?;
         Ok(())
@@ -154,8 +151,7 @@ pub fn sync_repository(repository: &str) -> Result<(), SwarmError> {
 }
 
 pub fn collapse_repository(repository: &str) -> Result<(), SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         repo_store.collapse(repository).await?;
         Ok(())
@@ -163,8 +159,7 @@ pub fn collapse_repository(repository: &str) -> Result<(), SwarmError> {
 }
 
 pub fn expand_repository(repository: &str) -> Result<(), SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         repo_store.expand(repository).await?;
         Ok(())
@@ -172,8 +167,7 @@ pub fn expand_repository(repository: &str) -> Result<(), SwarmError> {
 }
 
 pub fn rename_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         let workspace_store = WorkspaceStore::open().await?;
         let session_store = SessionStore::open().await?;
@@ -202,8 +196,7 @@ pub fn rename_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntr
 }
 
 pub fn clone_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         let workspace_store = WorkspaceStore::open().await?;
         let session_store = SessionStore::open().await?;
@@ -238,8 +231,7 @@ pub fn clone_workspace(workspace_ref: &str, name: &str) -> Result<WorkspaceEntry
 }
 
 pub fn remove_workspace(workspace_ref: &str) -> Result<WorkspaceEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let repo_store = RepositoryStore::open().await?;
         let session_store = SessionStore::open().await?;
         let workspace_store = WorkspaceStore::open().await?;
@@ -261,8 +253,7 @@ pub fn remove_workspace(workspace_ref: &str) -> Result<WorkspaceEntry, SwarmErro
 }
 
 pub fn create_session(workspace_ref: &str) -> Result<SessionEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let session_store = SessionStore::open().await?;
         let session = session_store
             .create(workspace_ref, &default_session_command())
@@ -280,8 +271,7 @@ pub fn create_session(workspace_ref: &str) -> Result<SessionEntry, SwarmError> {
 }
 
 pub fn close_session(session_id: &str) -> Result<SessionEntry, SwarmError> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(async {
+    exec::runtime().block_on(async {
         let session_store = SessionStore::open().await?;
         session_store.stop(session_id).await?;
         let session = session_store.remove(session_id).await?;
