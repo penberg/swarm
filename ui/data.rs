@@ -250,21 +250,19 @@ pub fn remove_workspace(workspace_ref: &str) -> Result<WorkspaceEntry, SwarmErro
     })
 }
 
-pub fn create_session(workspace_ref: &str) -> Result<SessionEntry, SwarmError> {
-    exec::runtime().block_on(async {
-        let session_store = SessionStore::open().await?;
-        let session = session_store
-            .create(workspace_ref, &default_session_command())
-            .await?;
+pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, SwarmError> {
+    let session_store = SessionStore::open().await?;
+    let session = session_store
+        .create(&workspace_ref, &default_session_command())
+        .await?;
 
-        Ok(SessionEntry {
-            id: session.id,
-            pid: session.pid,
-            program: session_program(session.pid, &session.command),
-            status: session.status,
-            log_path: session.log_path.display().to_string(),
-            socket_path: session.socket_path.display().to_string(),
-        })
+    Ok(SessionEntry {
+        id: session.id,
+        pid: session.pid,
+        program: session_program(session.pid, &session.command),
+        status: session.status,
+        log_path: session.log_path.display().to_string(),
+        socket_path: session.socket_path.display().to_string(),
     })
 }
 

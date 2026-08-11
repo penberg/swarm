@@ -533,6 +533,7 @@ fn build_ui(app: &Application) {
         pr_statuses: RefCell::new(HashMap::new()),
         pending_pr_lookups: RefCell::new(HashSet::new()),
         creating_pr_workspaces: RefCell::new(HashSet::new()),
+        creating_session_workspaces: RefCell::new(HashSet::new()),
     });
 
     let sidebar_widgets = build_sidebar_widgets(&state);
@@ -568,6 +569,7 @@ pub struct AppState {
     pr_statuses: RefCell<HashMap<String, CachedPrStatus>>,
     pending_pr_lookups: RefCell<HashSet<String>>,
     pub(crate) creating_pr_workspaces: RefCell<HashSet<String>>,
+    pub(crate) creating_session_workspaces: RefCell<HashSet<String>>,
 }
 
 #[derive(Clone)]

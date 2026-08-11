@@ -130,8 +130,8 @@ impl DetailWidgets {
         {
             let state = state.clone();
             let workspace_ref = workspace_ref(workspace);
-            add_button.connect_clicked(move |_| {
-                create_and_select_session(&state, &workspace_ref);
+            add_button.connect_clicked(move |button| {
+                create_and_select_session(&state, &workspace_ref, button);
             });
         }
         self.session_toolbar.append(&add_button);
@@ -341,8 +341,8 @@ fn build_empty_session_placeholder(state: &Rc<AppState>, workspace: &WorkspaceEn
     {
         let state = state.clone();
         let workspace_id = workspace_ref(workspace);
-        new_terminal.connect_clicked(move |_| {
-            create_and_select_session(&state, &workspace_id);
+        new_terminal.connect_clicked(move |button| {
+            create_and_select_session(&state, &workspace_id, button);
         });
     }
 
@@ -622,29 +622,48 @@ fn sync_session_tab_labels(session_tabs: &GtkBox, programs: &[(String, String)])
     }
 }
 
-fn create_and_select_session(state: &Rc<AppState>, workspace_id: &str) {
-    match create_session(workspace_id) {
-        Ok(session) => {
-            let mut next_groups = current_groups(state);
-            for group in &mut next_groups {
-                if let Some(workspace) = group
-                    .workspaces
-                    .iter_mut()
-                    .find(|workspace| workspace_ref(workspace) == workspace_id)
-                {
-                    workspace.sessions.push(session.clone());
-                    break;
-                }
-            }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(workspace_id.to_string());
-            remember_selected_session(state, workspace_id, Some(&session.id));
-            schedule_render_current_ui(state, Some(workspace_id.to_string()), Some(session.id));
-        }
-        Err(err) => {
-            eprintln!("failed to create session: {err}");
-        }
+fn create_and_select_session(state: &Rc<AppState>, workspace_id: &str, button: &Button) {
+    if !state
+        .creating_session_workspaces
+        .borrow_mut()
+        .insert(workspace_id.to_string())
+    {
+        return;
     }
+    button.set_sensitive(false);
+
+    let state = state.clone();
+    let workspace_id = workspace_id.to_string();
+    let button = button.clone();
+    exec::dispatch(create_session(workspace_id.clone()), move |result| {
+        state
+            .creating_session_workspaces
+            .borrow_mut()
+            .remove(&workspace_id);
+        button.set_sensitive(true);
+        match result {
+            Ok(session) => {
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    if let Some(workspace) = group
+                        .workspaces
+                        .iter_mut()
+                        .find(|workspace| workspace_ref(workspace) == workspace_id)
+                    {
+                        workspace.sessions.push(session.clone());
+                        break;
+                    }
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.selected_workspace.borrow_mut() = Some(workspace_id.clone());
+                remember_selected_session(&state, &workspace_id, Some(&session.id));
+                schedule_render_current_ui(&state, Some(workspace_id.clone()), Some(session.id));
+            }
+            Err(err) => {
+                eprintln!("failed to create session: {err}");
+            }
+        }
+    });
 }
 
 fn close_specific_session(
