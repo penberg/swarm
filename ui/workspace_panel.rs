@@ -672,37 +672,51 @@ fn close_specific_session(
     session_ids: &[String],
     session_id: &str,
 ) {
+    if !state
+        .closing_sessions
+        .borrow_mut()
+        .insert(session_id.to_string())
+    {
+        return;
+    }
+
     let next_selected = session_ids
         .iter()
         .find(|id| id.as_str() != session_id)
         .cloned();
 
-    match close_session(session_id) {
-        Ok(_) => {
-            if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
-                detail_widgets.evict_terminals([session_id]);
-            }
-            let preferred_session = next_selected.clone();
-            let mut next_groups = current_groups(state);
-            for group in &mut next_groups {
-                if let Some(workspace) = group
-                    .workspaces
-                    .iter_mut()
-                    .find(|workspace| workspace_ref(workspace) == workspace_id)
-                {
-                    workspace
-                        .sessions
-                        .retain(|session| session.id != session_id);
-                    break;
+    let state = state.clone();
+    let workspace_id = workspace_id.to_string();
+    let session_id = session_id.to_string();
+    exec::dispatch(close_session(session_id.clone()), move |result| {
+        state.closing_sessions.borrow_mut().remove(&session_id);
+        match result {
+            Ok(_) => {
+                if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
+                    detail_widgets.evict_terminals([session_id.as_str()]);
                 }
+                let preferred_session = next_selected.clone();
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    if let Some(workspace) = group
+                        .workspaces
+                        .iter_mut()
+                        .find(|workspace| workspace_ref(workspace) == workspace_id)
+                    {
+                        workspace
+                            .sessions
+                            .retain(|session| session.id != session_id);
+                        break;
+                    }
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.selected_workspace.borrow_mut() = Some(workspace_id.clone());
+                remember_selected_session(&state, &workspace_id, next_selected.as_deref());
+                schedule_render_current_ui(&state, Some(workspace_id.clone()), preferred_session);
             }
-            *state.workspace_groups.borrow_mut() = next_groups.clone();
-            *state.selected_workspace.borrow_mut() = Some(workspace_id.to_string());
-            remember_selected_session(state, workspace_id, next_selected.as_deref());
-            schedule_render_current_ui(state, Some(workspace_id.to_string()), preferred_session);
+            Err(err) => {
+                eprintln!("failed to close session: {err}");
+            }
         }
-        Err(err) => {
-            eprintln!("failed to close session: {err}");
-        }
-    }
+    });
 }

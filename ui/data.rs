@@ -266,20 +266,18 @@ pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, Swarm
     })
 }
 
-pub fn close_session(session_id: &str) -> Result<SessionEntry, SwarmError> {
-    exec::runtime().block_on(async {
-        let session_store = SessionStore::open().await?;
-        session_store.stop(session_id).await?;
-        let session = session_store.remove(session_id).await?;
+pub async fn close_session(session_id: String) -> Result<SessionEntry, SwarmError> {
+    let session_store = SessionStore::open().await?;
+    session_store.stop(&session_id).await?;
+    let session = session_store.remove(&session_id).await?;
 
-        Ok(SessionEntry {
-            id: session.id,
-            pid: session.pid,
-            program: session_program(session.pid, &session.command),
-            status: session.status,
-            log_path: session.log_path.display().to_string(),
-            socket_path: session.socket_path.display().to_string(),
-        })
+    Ok(SessionEntry {
+        id: session.id,
+        pid: session.pid,
+        program: session_program(session.pid, &session.command),
+        status: session.status,
+        log_path: session.log_path.display().to_string(),
+        socket_path: session.socket_path.display().to_string(),
     })
 }
 
