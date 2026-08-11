@@ -60,7 +60,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
                 .into_iter()
                 .map(|session| SessionEntry {
                     pid: session.pid,
-                    program: session_program(session.pid, &session.command),
+                    program: command_program(&session.command),
                     id: session.id,
                     status: session.status,
                     log_path: session.log_path.display().to_string(),
@@ -115,7 +115,7 @@ pub async fn create_workspace(
         .into_iter()
         .map(|session| SessionEntry {
             pid: session.pid,
-            program: session_program(session.pid, &session.command),
+            program: command_program(&session.command),
             id: session.id,
             status: session.status,
             log_path: session.log_path.display().to_string(),
@@ -172,7 +172,7 @@ pub async fn rename_workspace(
         .into_iter()
         .map(|session| SessionEntry {
             pid: session.pid,
-            program: session_program(session.pid, &session.command),
+            program: command_program(&session.command),
             id: session.id,
             status: session.status,
             log_path: session.log_path.display().to_string(),
@@ -208,7 +208,7 @@ pub async fn clone_workspace(
         .into_iter()
         .map(|session| SessionEntry {
             pid: session.pid,
-            program: session_program(session.pid, &session.command),
+            program: command_program(&session.command),
             id: session.id,
             status: session.status,
             log_path: session.log_path.display().to_string(),
@@ -248,7 +248,7 @@ pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, Swarm
     Ok(SessionEntry {
         id: session.id,
         pid: session.pid,
-        program: session_program(session.pid, &session.command),
+        program: command_program(&session.command),
         status: session.status,
         log_path: session.log_path.display().to_string(),
         socket_path: session.socket_path.display().to_string(),
@@ -263,7 +263,7 @@ pub async fn close_session(session_id: String) -> Result<SessionEntry, SwarmErro
     Ok(SessionEntry {
         id: session.id,
         pid: session.pid,
-        program: session_program(session.pid, &session.command),
+        program: command_program(&session.command),
         status: session.status,
         log_path: session.log_path.display().to_string(),
         socket_path: session.socket_path.display().to_string(),
@@ -379,10 +379,6 @@ fn pluralize(value: u64, unit: &str) -> String {
     } else {
         format!("{value} {unit}s ago")
     }
-}
-
-fn session_program(pid: Option<u32>, command: &[String]) -> String {
-    foreground_program(pid).unwrap_or_else(|| command_program(command))
 }
 
 pub fn foreground_program(pid: Option<u32>) -> Option<String> {
