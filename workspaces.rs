@@ -227,7 +227,7 @@ impl WorkspaceStore {
         let mut pruned_names = Vec::new();
         let bare_repo_path = self.repos.bare_repo_path(&repo);
         for (name, path) in archived_workspaces {
-            run_git(
+            let removed = run_git(
                 Some(&self.repos.repo_dir(&repo)),
                 [
                     format!("--git-dir={}", bare_repo_path.display()),
@@ -236,7 +236,25 @@ impl WorkspaceStore {
                     "--force".to_string(),
                     path.display().to_string(),
                 ],
-            )?;
+            );
+
+            if removed.is_err() {
+                // Git refuses to remove a worktree it no longer recognizes,
+                // e.g. when the directory was deleted out from under it.
+                // Clean up whatever is left on disk and let `git worktree
+                // prune` discard the stale bookkeeping.
+                if path.exists() {
+                    fs::remove_dir_all(&path)?;
+                }
+                let _ = run_git(
+                    Some(&self.repos.repo_dir(&repo)),
+                    [
+                        format!("--git-dir={}", bare_repo_path.display()),
+                        "worktree".to_string(),
+                        "prune".to_string(),
+                    ],
+                );
+            }
 
             db.execute("DELETE FROM workspaces WHERE name = ?1", [name.as_str()])
                 .await?;
@@ -890,7 +908,7 @@ mod tests {
         build_clone_worktree_add_args, build_worktree_add_args, migrate_repo_db,
         render_git_failure, run_git,
     };
-    use crate::{SwarmError, repos::RepositoryStore, workspaces::WorkspaceStore};
+    use crate::{repos::RepositoryStore, workspaces::WorkspaceStore};
 
     #[test]
     fn default_branch_workspace_is_reset_to_origin_tip() {
@@ -1064,7 +1082,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prune_keeps_archived_row_when_git_remove_fails() {
+    async fn prune_removes_archived_row_when_worktree_is_missing() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
         let data_home = unique_temp_path("swarm-test-data-home");
         fs::create_dir_all(&data_home).unwrap();
@@ -1100,16 +1118,14 @@ mod tests {
             .unwrap();
 
             let store = WorkspaceStore::open().await.unwrap();
-            let err = store.prune("github/penberg/swarm").await.unwrap_err();
-            assert!(matches!(err, SwarmError::Git(_)));
+            let pruned = store.prune("github/penberg/swarm").await.unwrap();
+            assert_eq!(pruned, vec!["archived".to_string()]);
 
             let mut stmt = conn
                 .prepare("SELECT name FROM workspaces WHERE archived_at IS NOT NULL")
                 .await
                 .unwrap();
             let mut rows = stmt.query(()).await.unwrap();
-            let row = rows.next().await.unwrap().unwrap();
-            assert_eq!(row.get::<String>(0).unwrap(), "archived");
             assert!(rows.next().await.unwrap().is_none());
         }
         .await;
