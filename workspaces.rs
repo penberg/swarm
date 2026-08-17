@@ -29,6 +29,19 @@ pub struct WorkspaceReference {
     pub workspace: String,
 }
 
+#[derive(Debug, Default)]
+pub struct PruneReport {
+    pub pruned: Vec<String>,
+    pub failed: Vec<PruneFailure>,
+}
+
+#[derive(Debug)]
+pub struct PruneFailure {
+    pub name: String,
+    pub path: PathBuf,
+    pub error: SwarmError,
+}
+
 pub struct WorkspaceStore {
     repos: RepositoryStore,
 }
@@ -207,7 +220,7 @@ impl WorkspaceStore {
             ..workspace
         })
     }
-    pub async fn prune(&self, repository: &str) -> Result<Vec<String>, SwarmError> {
+    pub async fn prune(&self, repository: &str) -> Result<PruneReport, SwarmError> {
         let repo = self
             .repos
             .resolve_repository(repository)
@@ -224,7 +237,7 @@ impl WorkspaceStore {
             archived_workspaces.push((row.get::<String>(0)?, PathBuf::from(row.get::<String>(1)?)));
         }
 
-        let mut pruned_names = Vec::new();
+        let mut report = PruneReport::default();
         let bare_repo_path = self.repos.bare_repo_path(&repo);
         for (name, path) in archived_workspaces {
             let removed = run_git(
@@ -244,7 +257,17 @@ impl WorkspaceStore {
                 // Clean up whatever is left on disk and let `git worktree
                 // prune` discard the stale bookkeeping.
                 if path.exists() {
-                    fs::remove_dir_all(&path)?;
+                    if let Err(err) = fs::remove_dir_all(&path) {
+                        // Keep the row so the workspace shows up in the next
+                        // prune, and keep going: one stuck workspace must not
+                        // block the rest.
+                        report.failed.push(PruneFailure {
+                            name,
+                            path,
+                            error: err.into(),
+                        });
+                        continue;
+                    }
                 }
                 let _ = run_git(
                     Some(&self.repos.repo_dir(&repo)),
@@ -259,10 +282,10 @@ impl WorkspaceStore {
             db.execute("DELETE FROM workspaces WHERE name = ?1", [name.as_str()])
                 .await?;
 
-            pruned_names.push(name);
+            report.pruned.push(name);
         }
 
-        Ok(pruned_names)
+        Ok(report)
     }
 
     pub async fn rename(&self, workspace: &str, new_name: &str) -> Result<Workspace, SwarmError> {
@@ -1118,8 +1141,9 @@ mod tests {
             .unwrap();
 
             let store = WorkspaceStore::open().await.unwrap();
-            let pruned = store.prune("github/penberg/swarm").await.unwrap();
-            assert_eq!(pruned, vec!["archived".to_string()]);
+            let report = store.prune("github/penberg/swarm").await.unwrap();
+            assert_eq!(report.pruned, vec!["archived".to_string()]);
+            assert!(report.failed.is_empty());
 
             let mut stmt = conn
                 .prepare("SELECT name FROM workspaces WHERE archived_at IS NOT NULL")
@@ -1129,6 +1153,81 @@ mod tests {
             assert!(rows.next().await.unwrap().is_none());
         }
         .await;
+
+        result
+    }
+
+    #[tokio::test]
+    async fn prune_reports_undeletable_worktree_and_keeps_going() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let data_home = unique_temp_path("swarm-test-data-home");
+        fs::create_dir_all(&data_home).unwrap();
+        let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
+
+        let stuck_path = unique_temp_path("swarm-test-stuck-workspace");
+        fs::create_dir_all(stuck_path.join("subdir")).unwrap();
+        // A read-only directory makes its entries undeletable, which is what
+        // remove_dir_all runs into when a worktree holds files the user
+        // cannot remove.
+        fs::set_permissions(&stuck_path, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let result = async {
+            let repos = RepositoryStore::open().await.unwrap();
+            let repo = repos.add("github/penberg/swarm", None).await.unwrap();
+            let bare_repo_path = repos.bare_repo_path(&repo);
+            fs::create_dir_all(repos.repo_dir(&repo)).unwrap();
+            run_git(
+                Some(&repos.repo_dir(&repo)),
+                [
+                    "init".to_string(),
+                    "--bare".to_string(),
+                    bare_repo_path.display().to_string(),
+                ],
+            )
+            .unwrap();
+
+            let repo_db_path = repos.repo_db_path(&repo);
+            let db = Builder::new_local(repo_db_path.to_str().unwrap())
+                .build()
+                .await
+                .unwrap();
+            let conn = db.connect().unwrap();
+            migrate_repo_db(&conn, &repo_db_path).await.unwrap();
+            conn.execute(
+                "INSERT INTO workspaces (name, branch, path, created_at, archived_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                ("stuck", "main", stuck_path.display().to_string(), 1_i64, 2_i64),
+            )
+            .await
+            .unwrap();
+            conn.execute(
+                "INSERT INTO workspaces (name, branch, path, created_at, archived_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                ("gone", "main", "/tmp/does-not-exist", 1_i64, 2_i64),
+            )
+            .await
+            .unwrap();
+
+            let store = WorkspaceStore::open().await.unwrap();
+            let report = store.prune("github/penberg/swarm").await.unwrap();
+            assert_eq!(report.pruned, vec!["gone".to_string()]);
+            assert_eq!(report.failed.len(), 1);
+            assert_eq!(report.failed[0].name, "stuck");
+            assert_eq!(report.failed[0].path, stuck_path);
+
+            let mut stmt = conn
+                .prepare("SELECT name FROM workspaces WHERE archived_at IS NOT NULL")
+                .await
+                .unwrap();
+            let mut rows = stmt.query(()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), "stuck");
+            assert!(rows.next().await.unwrap().is_none());
+        }
+        .await;
+
+        fs::set_permissions(&stuck_path, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(&stuck_path).unwrap();
 
         result
     }

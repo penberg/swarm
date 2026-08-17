@@ -1,5 +1,8 @@
 use crate::{
-    SwarmError, repos::RepositoryStore, sessions::SessionStore, workspaces::WorkspaceStore,
+    SwarmError,
+    repos::RepositoryStore,
+    sessions::SessionStore,
+    workspaces::{PruneReport, WorkspaceStore},
 };
 
 pub struct PruneStore {
@@ -21,13 +24,15 @@ impl PruneStore {
         self.sessions.prune_terminal_sessions().await
     }
 
-    pub async fn workspaces(&self) -> Result<usize, SwarmError> {
-        let mut pruned = 0;
+    pub async fn workspaces(&self) -> Result<PruneReport, SwarmError> {
+        let mut report = PruneReport::default();
 
         for repo in self.repos.list().await? {
-            pruned += self.workspaces.prune(&repo.canonical()).await?.len();
+            let mut repo_report = self.workspaces.prune(&repo.canonical()).await?;
+            report.pruned.append(&mut repo_report.pruned);
+            report.failed.append(&mut repo_report.failed);
         }
 
-        Ok(pruned)
+        Ok(report)
     }
 }

@@ -65,6 +65,9 @@ pub enum SwarmError {
     #[error("git command failed: {0}")]
     Git(String),
 
+    #[error("failed to prune {0} workspace(s)")]
+    PruneIncomplete(usize),
+
     #[error("failed to resolve swarm data directory")]
     PathResolution,
 }
