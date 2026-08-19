@@ -1,6 +1,0 @@
-{
-  "git": {
-    "sha1": "86338c17d1926c7e863f3c94d70202d3d1d60172"
-  },
-  "path_in_vcs": "crates/libghostty-vt-sys"
-}

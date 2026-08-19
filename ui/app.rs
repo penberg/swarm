@@ -14,7 +14,10 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
-use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
+use swarm::{
+    SwarmError,
+    forges::github::{self, PullRequestStatus, PullRequestStatusState},
+};
 
 use crate::{
     data::{
@@ -306,10 +309,6 @@ window {
 
 .session-toolbar-spacer {
   min-width: 0;
-}
-
-.session-tabs {
-  spacing: 0;
 }
 
 .session-pr-link {
@@ -2074,7 +2073,7 @@ fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, b
                 .remove(&removed_workspace_ref);
             button.set_sensitive(true);
             match result {
-                Ok(_) => {
+                Ok(_) | Err(SwarmError::WorkspaceNotFound(_)) => {
                     // Drop the cached terminals of the removed sessions, otherwise their
                     // widgets stay alive and keep polling a socket that is already gone.
                     if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {
