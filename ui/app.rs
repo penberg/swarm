@@ -19,9 +19,9 @@ use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 use crate::{
     data::{
         WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, create_workspace,
-        current_workspace_branch, load_workspace_groups, read_workspace_head, remove_workspace,
-        rename_workspace, set_all_repositories_collapsed, set_repository_collapsed,
-        sync_repository, workspace_head_path,
+        current_workspace_branch, load_workspace_groups, mark_repository_used, read_workspace_head,
+        remove_workspace, rename_workspace, set_all_repositories_collapsed,
+        set_repository_collapsed, sync_repository, workspace_head_path,
     },
     exec,
     workspace_panel::DetailWidgets,
@@ -184,6 +184,23 @@ window {
 .repo-sync:disabled {
   color: #a9d8ff;
   opacity: 1;
+}
+
+.more-repositories {
+  min-height: 24px;
+  margin-top: 14px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #6f7887;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.more-repositories:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #e7f3ff;
 }
 
 .repo-header {
@@ -522,6 +539,7 @@ fn build_ui(app: &Application) {
         sidebar_widgets: RefCell::new(None),
         detail_widgets: RefCell::new(None),
         workspace_groups: RefCell::new(Vec::new()),
+        show_more_repositories: Cell::new(false),
         selected_workspace: RefCell::new(None),
         editing_workspace: RefCell::new(None),
         selected_session: RefCell::new(None),
@@ -561,6 +579,7 @@ pub struct AppState {
     sidebar_widgets: RefCell<Option<SidebarWidgets>>,
     pub detail_widgets: RefCell<Option<DetailWidgets>>,
     pub workspace_groups: RefCell<Vec<WorkspaceGroup>>,
+    show_more_repositories: Cell<bool>,
     pub selected_workspace: RefCell<Option<String>>,
     editing_workspace: RefCell<Option<String>>,
     pub selected_session: RefCell<Option<String>>,
@@ -1207,7 +1226,31 @@ fn render_sidebar_content(
 
     let rows = Rc::new(RefCell::new(Vec::<WorkspaceRow>::new()));
 
-    for group in groups {
+    // Repositories that have not been used recently are folded behind a
+    // "N more repositories" row. If none have been used recently, everything
+    // is shown so the sidebar is never empty.
+    let (recently_used, more): (Vec<_>, Vec<_>) =
+        groups.iter().partition(|group| group.recently_used);
+    let (visible, more) = if recently_used.is_empty() {
+        (more, Vec::new())
+    } else {
+        (recently_used, more)
+    };
+    let show_more = state.show_more_repositories.get();
+    let mut entries = visible.into_iter().map(Some).collect::<Vec<_>>();
+    if !more.is_empty() {
+        entries.push(None);
+        if show_more {
+            entries.extend(more.iter().copied().map(Some));
+        }
+    }
+
+    for entry in entries {
+        let Some(group) = entry else {
+            let more_row = build_more_repositories_row(state, more.len(), show_more);
+            sidebar_append_static_row(&list, &more_row);
+            continue;
+        };
         let is_syncing = state
             .syncing_repositories
             .borrow()
@@ -1291,6 +1334,7 @@ fn render_sidebar_content(
                     return;
                 }
 
+                mark_repo_used(&workspace.repo_canonical);
                 let preferred_session =
                     preferred_session_for_workspace(&state, &next_workspace_ref, None);
                 *state.selected_workspace.borrow_mut() = Some(next_workspace_ref);
@@ -1927,6 +1971,47 @@ fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry
     *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
     remember_selected_session(state, &workspace_ref, selected_session.as_deref());
     schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
+}
+
+fn build_more_repositories_row(state: &Rc<AppState>, count: usize, expanded: bool) -> Button {
+    let content = GtkBox::new(Orientation::Horizontal, 4);
+    let label = Label::new(Some(&if expanded {
+        "Show fewer repositories".to_string()
+    } else if count == 1 {
+        "1 more repository".to_string()
+    } else {
+        format!("{count} more repositories")
+    }));
+    label.set_xalign(0.0);
+    content.append(&label);
+    let icon = Image::from_icon_name(if expanded {
+        "pan-down-symbolic"
+    } else {
+        "pan-end-symbolic"
+    });
+    icon.set_pixel_size(12);
+    content.append(&icon);
+
+    let button = Button::new();
+    button.set_halign(Align::Start);
+    button.add_css_class("more-repositories");
+    button.set_child(Some(&content));
+    {
+        let state = state.clone();
+        button.connect_clicked(move |_| {
+            state.show_more_repositories.set(!expanded);
+            schedule_render_sidebar_only(&state);
+        });
+    }
+    button
+}
+
+fn mark_repo_used(repo_canonical: &str) {
+    exec::dispatch(mark_repository_used(repo_canonical.to_string()), |result| {
+        if let Err(err) = result {
+            eprintln!("failed to record repository use: {err}");
+        }
+    });
 }
 
 fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {

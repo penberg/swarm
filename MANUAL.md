@@ -94,6 +94,7 @@ Stores one row per repository:
 - `name`
 - `alias`
 - `created_at`
+- `last_used_at`: Unix timestamp of when the repository was added or one of its workspaces was last selected in the UI, or `NULL`.
 
 Canonical identity: the `(host, owner, name)` tuple. Aliases are shortcuts, not primary identifiers.
 

@@ -18,6 +18,7 @@ pub struct Repository {
     pub alias: Option<String>,
     pub remote_url: Option<String>,
     pub collapsed: bool,
+    pub last_used_at: Option<i64>,
 }
 
 impl Repository {
@@ -43,6 +44,7 @@ impl Repository {
             alias: Some(default_alias),
             remote_url,
             collapsed: false,
+            last_used_at: None,
         })
     }
 
@@ -130,6 +132,7 @@ impl RepositoryStore {
                 remote_url TEXT,
                 collapsed INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
+                last_used_at INTEGER,
                 PRIMARY KEY (host, owner, name)
             );
 
@@ -142,6 +145,7 @@ impl RepositoryStore {
         .map_err(|err| database_error(&index_db_path, "initialize schema", err))?;
         ensure_collapsed_column(&conn, &index_db_path).await?;
         ensure_remote_url_column(&conn, &index_db_path).await?;
+        ensure_last_used_at_column(&conn, &index_db_path).await?;
 
         Ok(Self { paths, conn })
     }
@@ -151,7 +155,7 @@ impl RepositoryStore {
         repository: &str,
         alias: Option<&str>,
     ) -> Result<Repository, SwarmError> {
-        let repo = Repository::parse(repository, alias)?;
+        let mut repo = Repository::parse(repository, alias)?;
 
         if self.find_repository(&repo).await?.is_some() {
             return Err(SwarmError::DuplicateRepository(repo.canonical()));
@@ -189,9 +193,11 @@ impl RepositoryStore {
             .await
             .map_err(|err| database_error(&repo_db_path, "initialize schema", err))?;
 
+        let created_at = unix_timestamp();
+        repo.last_used_at = Some(created_at);
         self.conn
             .execute(
-                "INSERT INTO repos (host, owner, name, alias, remote_url, collapsed, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO repos (host, owner, name, alias, remote_url, collapsed, created_at, last_used_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 (
                     repo.host.as_str(),
                     repo.owner.as_str(),
@@ -199,7 +205,8 @@ impl RepositoryStore {
                     repo.alias.as_deref(),
                     repo.remote_url.as_deref(),
                     repo.collapsed,
-                    unix_timestamp(),
+                    created_at,
+                    created_at,
                 ),
             )
             .await?;
@@ -212,7 +219,7 @@ impl RepositoryStore {
             .conn
             .prepare(
                 "SELECT host, owner, name, alias, collapsed
-                 , remote_url
+                 , remote_url, last_used_at
                  FROM repos
                  ORDER BY host, owner, name",
             )
@@ -228,6 +235,7 @@ impl RepositoryStore {
                 alias: row.get::<Option<String>>(3)?,
                 collapsed: row.get::<i64>(4)? != 0,
                 remote_url: row.get::<Option<String>>(5)?,
+                last_used_at: row.get::<Option<i64>>(6)?,
             });
         }
 
@@ -373,12 +381,35 @@ impl RepositoryStore {
         Ok(())
     }
 
+    pub async fn mark_used(&self, repository: &str) -> Result<(), SwarmError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
+
+        self.conn
+            .execute(
+                "UPDATE repos
+                 SET last_used_at = ?4
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3",
+                (
+                    repo.host.as_str(),
+                    repo.owner.as_str(),
+                    repo.name.as_str(),
+                    unix_timestamp(),
+                ),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     async fn find_repository(&self, repo: &Repository) -> Result<Option<Repository>, SwarmError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT host, owner, name, alias, collapsed
-                 , remote_url
+                 , remote_url, last_used_at
                  FROM repos
                  WHERE host = ?1 AND owner = ?2 AND name = ?3",
             )
@@ -395,6 +426,7 @@ impl RepositoryStore {
                 alias: row.get::<Option<String>>(3)?,
                 collapsed: row.get::<i64>(4)? != 0,
                 remote_url: row.get::<Option<String>>(5)?,
+                last_used_at: row.get::<Option<i64>>(6)?,
             }));
         }
 
@@ -425,6 +457,7 @@ impl RepositoryStore {
                     alias: None,
                     remote_url: None,
                     collapsed: false,
+                    last_used_at: None,
                 })
                 .await;
         }
@@ -437,7 +470,7 @@ impl RepositoryStore {
             .conn
             .prepare(
                 "SELECT host, owner, name, alias, collapsed
-                 , remote_url
+                 , remote_url, last_used_at
                  FROM repos
                  WHERE alias = ?1
                  LIMIT 1",
@@ -453,6 +486,7 @@ impl RepositoryStore {
                 alias: row.get::<Option<String>>(3)?,
                 collapsed: row.get::<i64>(4)? != 0,
                 remote_url: row.get::<Option<String>>(5)?,
+                last_used_at: row.get::<Option<i64>>(6)?,
             }));
         }
 
@@ -510,6 +544,18 @@ async fn ensure_remote_url_column(conn: &Connection, path: &Path) -> Result<(), 
     conn.execute("ALTER TABLE repos ADD COLUMN remote_url TEXT", ())
         .await
         .map_err(|err| database_error(path, "add remote_url column", err))?;
+
+    Ok(())
+}
+
+async fn ensure_last_used_at_column(conn: &Connection, path: &Path) -> Result<(), SwarmError> {
+    if has_column(conn, "repos", "last_used_at").await? {
+        return Ok(());
+    }
+
+    conn.execute("ALTER TABLE repos ADD COLUMN last_used_at INTEGER", ())
+        .await
+        .map_err(|err| database_error(path, "add last_used_at column", err))?;
 
     Ok(())
 }
@@ -715,6 +761,7 @@ mod tests {
             alias: None,
             remote_url: None,
             collapsed: false,
+            last_used_at: None,
         };
 
         assert_eq!(repo.remote_url(), "https://github.com/penberg/swarm.git");

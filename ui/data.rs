@@ -2,7 +2,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use swarm::{
     SwarmError,
@@ -17,6 +17,7 @@ pub struct WorkspaceGroup {
     pub repo_canonical: String,
     pub repo_status: Option<String>,
     pub collapsed: bool,
+    pub recently_used: bool,
     pub workspace_count: usize,
     pub workspaces: Vec<WorkspaceEntry>,
 }
@@ -40,12 +41,16 @@ pub struct SessionEntry {
     pub socket_path: String,
 }
 
+/// How long a repository stays in the main sidebar list after its last use.
+const RECENTLY_USED_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
     let repos = repo_store.list().await?;
     let mut groups = Vec::with_capacity(repos.len());
+    let recently_used_since = unix_now() - RECENTLY_USED_WINDOW.as_secs() as i64;
 
     for repo in repos {
         let repo_label = repo.alias.clone().unwrap_or_else(|| repo.name.clone());
@@ -54,9 +59,17 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
         let workspaces = workspace_store.list(&repo_canonical).await?;
         let workspaces = workspaces.into_iter().map(|workspace| async {
             let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-            let sessions = session_store
-                .list(Some(&workspace_ref))
-                .await?
+            let sessions = session_store.list(Some(&workspace_ref)).await?;
+            let has_running_session = sessions
+                .iter()
+                .any(|session| matches!(session.status.as_str(), "running" | "starting"));
+            let last_activity = sessions
+                .iter()
+                .flat_map(|session| [Some(session.created_at), session.stopped_at])
+                .flatten()
+                .chain([workspace.created_at])
+                .max();
+            let sessions = sessions
                 .into_iter()
                 .map(|session| SessionEntry {
                     pid: session.pid,
@@ -68,11 +81,21 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
                 })
                 .collect::<Vec<_>>();
 
-            Ok::<WorkspaceEntry, SwarmError>(map_workspace(&repo_canonical, workspace, sessions))
+            Ok::<_, SwarmError>((
+                map_workspace(&repo_canonical, workspace, sessions),
+                has_running_session,
+                last_activity,
+            ))
         });
         let mut workspace_entries = Vec::new();
+        let mut recently_used = repo
+            .last_used_at
+            .is_some_and(|last_used_at| last_used_at >= recently_used_since);
         for workspace in workspaces {
-            workspace_entries.push(workspace.await?);
+            let (entry, has_running_session, last_activity) = workspace.await?;
+            recently_used |= has_running_session
+                || last_activity.is_some_and(|last_activity| last_activity >= recently_used_since);
+            workspace_entries.push(entry);
         }
         let workspace_count = workspace_entries.len();
 
@@ -81,15 +104,21 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
             repo_canonical,
             repo_status,
             collapsed: repo.collapsed,
+            recently_used,
             workspace_count,
             workspaces: workspace_entries,
         });
     }
 
     groups.sort_by(|left, right| {
-        left.repo_label
-            .to_lowercase()
-            .cmp(&right.repo_label.to_lowercase())
+        right
+            .recently_used
+            .cmp(&left.recently_used)
+            .then_with(|| {
+                left.repo_label
+                    .to_lowercase()
+                    .cmp(&right.repo_label.to_lowercase())
+            })
             .then_with(|| left.repo_canonical.cmp(&right.repo_canonical))
     });
 
@@ -163,6 +192,11 @@ pub async fn set_repository_collapsed(
 pub async fn set_all_repositories_collapsed(collapsed: bool) -> Result<(), SwarmError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store.set_all_collapsed(collapsed).await
+}
+
+pub async fn mark_repository_used(repository: String) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.mark_used(&repository).await
 }
 
 pub async fn rename_workspace(
@@ -384,6 +418,13 @@ fn repo_sync_status(repo_store: &RepositoryStore, repo: &Repository) -> Option<S
     .find_map(file_modified_time)?;
 
     Some(format_relative_sync_time(timestamp))
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn file_modified_time(path: PathBuf) -> Option<SystemTime> {
