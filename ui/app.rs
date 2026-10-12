@@ -546,6 +546,7 @@ fn build_ui(app: &Application) {
         selected_sessions: RefCell::new(HashMap::new()),
         repository_form: RefCell::new(RepositoryFormState::default()),
         branch_monitors: RefCell::new(Vec::new()),
+        pr_indicators: RefCell::new(HashMap::new()),
         syncing_repositories: RefCell::new(HashSet::new()),
         pr_statuses: RefCell::new(HashMap::new()),
         pending_pr_lookups: RefCell::new(HashSet::new()),
@@ -586,6 +587,7 @@ pub struct AppState {
     selected_sessions: RefCell<HashMap<String, String>>,
     repository_form: RefCell<RepositoryFormState>,
     branch_monitors: RefCell<Vec<FileMonitor>>,
+    pr_indicators: RefCell<HashMap<String, GtkBox>>,
     syncing_repositories: RefCell<HashSet<String>>,
     pr_statuses: RefCell<HashMap<String, CachedPrStatus>>,
     pending_pr_lookups: RefCell<HashSet<String>>,
@@ -996,7 +998,7 @@ fn apply_workspace_pr_update(
     let selected_workspace_changed = selected_workspace.as_deref() == Some(workspace_ref.as_str());
     state.pending_pr_lookups.borrow_mut().remove(&workspace_ref);
     state.pr_statuses.borrow_mut().insert(
-        workspace_ref,
+        workspace_ref.clone(),
         CachedPrStatus {
             state: status
                 .map(WorkspacePrState::Ready)
@@ -1006,12 +1008,17 @@ fn apply_workspace_pr_update(
         },
     );
 
+    // Update the sidebar indicator in place. Rebuilding the whole sidebar for
+    // every lookup makes it flicker, since lookups complete continuously.
+    let indicator = state.pr_indicators.borrow().get(&workspace_ref).cloned();
+    if let Some(indicator) = indicator {
+        apply_workspace_status_indicator(state, &indicator, &workspace_ref);
+    }
+
     if selected_workspace_changed {
         if let Some(selected_workspace) = selected_workspace.as_deref() {
             render_selected_workspace_detail(state, selected_workspace, None);
         }
-    } else if !state.repository_form.borrow().expanded {
-        render_sidebar_only(state);
     }
 }
 
@@ -1214,6 +1221,7 @@ fn render_sidebar_content(
     selected_workspace: Option<WorkspaceEntry>,
 ) {
     clear_branch_monitors(state);
+    state.pr_indicators.borrow_mut().clear();
 
     let groups_empty = groups.is_empty();
     sync_repository_form_widgets(state, groups_empty);
@@ -1798,10 +1806,39 @@ fn build_workspace_row(
     }
 }
 
+const WORKSPACE_PR_STATE_CLASSES: [&str; 4] = [
+    "workspace-pr-success",
+    "workspace-pr-pending",
+    "workspace-pr-failure",
+    "workspace-pr-merged",
+];
+
 fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceEntry) -> Widget {
     let indicator = GtkBox::new(Orientation::Horizontal, 0);
     indicator.add_css_class("workspace-pr-indicator");
-    match workspace_pr_snapshot(state, workspace) {
+    set_workspace_status_indicator(&indicator, &workspace_pr_snapshot(state, workspace));
+    state
+        .pr_indicators
+        .borrow_mut()
+        .insert(workspace_ref(workspace), indicator.clone());
+    indicator.upcast()
+}
+
+fn apply_workspace_status_indicator(state: &Rc<AppState>, indicator: &GtkBox, workspace_ref: &str) {
+    let pr_state = state
+        .pr_statuses
+        .borrow()
+        .get(workspace_ref)
+        .map(|entry| entry.state.clone())
+        .unwrap_or(WorkspacePrState::Loading);
+    set_workspace_status_indicator(indicator, &pr_state);
+}
+
+fn set_workspace_status_indicator(indicator: &GtkBox, pr_state: &WorkspacePrState) {
+    for class in WORKSPACE_PR_STATE_CLASSES {
+        indicator.remove_css_class(class);
+    }
+    match pr_state {
         WorkspacePrState::Loading => {
             indicator.set_tooltip_text(Some("Loading pull request status..."));
         }
@@ -1821,7 +1858,6 @@ fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceE
             }
         }
     }
-    indicator.upcast()
 }
 
 fn install_branch_monitor(state: &Rc<AppState>, workspace: &WorkspaceEntry, branch: &Label) {
