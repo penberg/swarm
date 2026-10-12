@@ -5,6 +5,7 @@ use splay::{
 };
 
 mod app;
+mod clamp;
 mod data;
 mod exec;
 mod ghostty;
