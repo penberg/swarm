@@ -12,7 +12,7 @@ The canonical repository identifier is:
 host/owner/name
 ```
 
-Example: `github.com/penberg/splay`
+Example: `github.com/splay-sh/splay`
 
 `splay repo` commands:
 - register a repository with `splay`
@@ -108,7 +108,7 @@ Also stores a `workspace_usage` table with one row per workspace selected in the
 Per-repository directory. Example:
 
 ```text
-~/.local/share/splay/repos/github.com/penberg/splay/
+~/.local/share/splay/repos/github.com/splay-sh/splay/
 ```
 
 Contains repository-specific state and worktree directories.
@@ -121,7 +121,7 @@ Repository metadata. Example:
 host = "github.com"
 owner = "penberg"
 name = "splay"
-canonical = "github.com/penberg/splay"
+canonical = "github.com/splay-sh/splay"
 alias = "splay"
 ```
 
@@ -138,7 +138,7 @@ Repository-local database. Stores:
 Git worktree checkout directories. Example:
 
 ```text
-~/.local/share/splay/repos/github.com/penberg/splay/workspaces/main/
+~/.local/share/splay/repos/github.com/splay-sh/splay/workspaces/main/
 ```
 
 The workspace name is the identifier within that repository.
@@ -148,7 +148,7 @@ The workspace name is the identifier within that repository.
 Per-session runtime state. Example:
 
 ```text
-~/.local/share/splay/repos/github.com/penberg/splay/sessions/01JSESSIONEXAMPLE/
+~/.local/share/splay/repos/github.com/splay-sh/splay/sessions/01JSESSIONEXAMPLE/
 ```
 
 This directory is intended to hold session-local files such as:
@@ -357,7 +357,7 @@ splay ws create <repository> [name]
 ```text
 splay workspace create splay
 splay workspace create splay feature-x
-splay ws create github.com/penberg/splay review-docs
+splay ws create github.com/splay-sh/splay review-docs
 ```
 
 #### Expected Output
@@ -434,7 +434,7 @@ splay workspace list <repository> --json
 
 ```text
 splay workspace list splay
-splay ws list github.com/penberg/splay --json
+splay ws list github.com/splay-sh/splay --json
 ```
 
 ### `splay workspace info`
@@ -506,7 +506,7 @@ splay repo add <host/owner/name|remote-url> [--alias <name>]
 #### Examples
 
 ```text
-splay repo add github.com/penberg/splay
+splay repo add github.com/splay-sh/splay
 splay repo add github.com/penberg/other --alias other
 splay repo add git@github.com:penberg/private-repo.git --alias private
 ```
@@ -548,7 +548,7 @@ splay repo list --json
 
 ```text
 ALIAS            REPOSITORY
-splay            github.com/penberg/splay
+splay            github.com/splay-sh/splay
 ```
 
 ### `splay repo sync`
@@ -575,7 +575,7 @@ splay repo sync <repository>
 
 ```text
 splay repo sync splay
-splay repo sync github.com/penberg/splay
+splay repo sync github.com/splay-sh/splay
 ```
 
 #### Expected Output
@@ -608,7 +608,7 @@ splay repo remove <repository>
 
 ```text
 splay repo remove splay
-splay repo remove github.com/penberg/splay
+splay repo remove github.com/splay-sh/splay
 ```
 
 #### Expected Output

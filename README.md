@@ -22,7 +22,7 @@ Splay was previously called Swarm. Read the [announcement blog post](https://pen
 Splay runs on Linux. Install the latest prebuilt release with:
 
 ```console
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/penberg/splay/releases/latest/download/splay-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/splay-sh/splay/releases/latest/download/splay-installer.sh | sh
 ```
 
 Then start the GUI with:

@@ -2,7 +2,7 @@
 name = "splay"
 version = "0.1.6"
 edition = "2024"
-repository = "https://github.com/penberg/splay"
+repository = "https://github.com/splay-sh/splay"
 
 [lib]
 path = "lib.rs"
