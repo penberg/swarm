@@ -397,6 +397,23 @@ window {
   color: #eaf5ff;
 }
 
+.settings-discard {
+  min-height: 28px;
+  padding: 0 14px;
+  background: transparent;
+  color: #9aa6b8;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-discard:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #eef4fb;
+}
+
+.settings-discard:disabled,
 .settings-save:disabled {
   background: transparent;
   color: #566172;

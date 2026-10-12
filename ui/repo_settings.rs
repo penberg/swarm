@@ -178,6 +178,12 @@ fn section_heading(text: &str) -> Label {
     heading
 }
 
+fn buffer_text(buffer: &TextBuffer) -> String {
+    buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+        .to_string()
+}
+
 fn build_setup_script_section(repository: &str) -> GtkBox {
     let section = GtkBox::new(Orientation::Vertical, 0);
     section.set_vexpand(true);
@@ -235,35 +241,68 @@ fn build_setup_script_section(repository: &str) -> GtkBox {
     hint.set_hexpand(true);
     hint.set_xalign(0.0);
     hint.add_css_class("settings-editor-hint");
+    let discard_button = Button::with_label("Discard");
+    discard_button.set_sensitive(false);
+    discard_button.set_tooltip_text(Some("Revert to the saved script"));
+    discard_button.add_css_class("settings-discard");
     let save_button = Button::with_label("Save");
     save_button.set_sensitive(false);
     save_button.add_css_class("settings-save");
     footer.append(&hint);
+    footer.append(&discard_button);
     footer.append(&save_button);
     card.append(&footer);
 
     section.append(&card);
 
+    // The script as last loaded or saved, which Discard reverts to.
+    let saved_script = Rc::new(RefCell::new(String::new()));
+    let mark_saved: Rc<dyn Fn()> = {
+        let buffer = buffer.clone();
+        let saved_script = saved_script.clone();
+        let save_button = save_button.clone();
+        let discard_button = discard_button.clone();
+        let status = status.clone();
+        Rc::new(move || {
+            if buffer_text(&buffer) != *saved_script.borrow() {
+                return;
+            }
+            save_button.set_sensitive(false);
+            discard_button.set_sensitive(false);
+            status.set_text(if saved_script.borrow().is_empty() {
+                "Empty"
+            } else {
+                "Saved"
+            });
+        })
+    };
+
     let save: Rc<dyn Fn()> = {
         let repository = repository.to_string();
         let buffer = buffer.clone();
+        let saved_script = saved_script.clone();
         let save_button = save_button.clone();
         let status = status.clone();
+        let mark_saved = mark_saved.clone();
         Rc::new(move || {
             if !save_button.is_sensitive() {
                 return;
             }
             save_button.set_sensitive(false);
             status.set_text("Saving ...");
-            let script = buffer
-                .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                .to_string();
+            let script = buffer_text(&buffer);
+            let saved_script = saved_script.clone();
             let save_button = save_button.clone();
             let status = status.clone();
+            let mark_saved = mark_saved.clone();
             exec::dispatch(
-                save_setup_script(repository.clone(), script),
+                save_setup_script(repository.clone(), script.clone()),
                 move |result| match result {
-                    Ok(()) => status.set_text("Saved"),
+                    Ok(()) => {
+                        *saved_script.borrow_mut() = script;
+                        // Edits made while saving stay unsaved.
+                        mark_saved();
+                    }
                     Err(err) => {
                         status.set_text(&format!("Failed to save: {err}"));
                         save_button.set_sensitive(true);
@@ -276,6 +315,17 @@ fn build_setup_script_section(repository: &str) -> GtkBox {
     {
         let save = save.clone();
         save_button.connect_clicked(move |_| save());
+    }
+
+    {
+        let buffer = buffer.clone();
+        let saved_script = saved_script.clone();
+        let mark_saved = mark_saved.clone();
+        discard_button.connect_clicked(move |_| {
+            let script = saved_script.borrow().clone();
+            buffer.set_text(&script);
+            mark_saved();
+        });
     }
 
     let keys = EventControllerKey::new();
@@ -295,11 +345,13 @@ fn build_setup_script_section(repository: &str) -> GtkBox {
         move |result| match result {
             Ok(script) => {
                 buffer.set_text(&script);
-                status.set_text(if script.is_empty() { "Empty" } else { "Saved" });
+                *saved_script.borrow_mut() = script;
+                mark_saved();
                 editor.set_sensitive(true);
                 // Connect after loading so that filling the buffer does not count as an edit.
                 buffer.connect_changed(move |_| {
                     save_button.set_sensitive(true);
+                    discard_button.set_sensitive(true);
                     status.set_text("Unsaved changes");
                 });
             }
