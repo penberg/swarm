@@ -21,6 +21,8 @@ pub struct WorkspaceGroup {
     pub recently_used: bool,
     pub workspace_count: usize,
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Remote sandboxes enabled for the repository.
+    pub remote_sandboxes: Vec<SandboxKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +70,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
         let repo_canonical = repo.canonical();
         let repo_status = repo_sync_status(&repo_store, &repo);
         let workspace_last_used = repo_store.workspace_last_used(&repo).await?;
+        let remote_sandboxes = repo_store.enabled_sandboxes(&repo).await?;
         let workspaces = workspace_store.list(&repo_canonical).await?;
         let workspaces = workspaces.into_iter().map(|workspace| async {
             let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
@@ -124,6 +127,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
             recently_used,
             workspace_count,
             workspaces: workspace_entries,
+            remote_sandboxes,
         });
     }
 
@@ -192,6 +196,17 @@ pub async fn load_setup_script(repository: String) -> Result<String, SplayError>
 pub async fn save_setup_script(repository: String, script: String) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store.set_setup_script(&repository, &script).await
+}
+
+pub async fn set_sandbox_enabled(
+    repository: String,
+    sandbox: SandboxKind,
+    enabled: bool,
+) -> Result<(), SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store
+        .set_sandbox_enabled(&repository, sandbox, enabled)
+        .await
 }
 
 pub async fn add_repository(

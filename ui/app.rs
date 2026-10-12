@@ -244,52 +244,163 @@ window {
 }
 
 .repo-settings {
-  padding: 28px 32px 24px 32px;
+  padding: 36px 40px 28px 40px;
 }
 
 .repo-settings-title {
   color: #f3f5f7;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 800;
+  letter-spacing: 0.06em;
 }
 
 .repo-settings-subtitle {
   color: #6f7887;
   font-size: 12px;
-  margin-bottom: 24px;
+  margin-top: 4px;
+  margin-bottom: 30px;
 }
 
-.repo-settings-heading {
-  color: #c3ccd9;
-  font-size: 13px;
-  font-weight: 700;
-  margin-bottom: 4px;
+.settings-section-heading {
+  color: #566172;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin-bottom: 10px;
 }
 
-.repo-settings-description {
-  color: #6f7887;
+.settings-section-description {
+  color: #7a8698;
   font-size: 12px;
   margin-bottom: 12px;
 }
 
-.repo-settings-script-frame {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 9px;
+.settings-card {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  margin-bottom: 30px;
 }
 
-.repo-settings-script,
-.repo-settings-script text {
-  background: rgba(255, 255, 255, 0.025);
+.settings-row {
+  padding: 14px 16px;
+}
+
+.settings-row-divided {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-tile {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #dfe6ef;
+}
+
+.settings-tile-remote {
+  color: #7ecbff;
+}
+
+.settings-row-title {
+  color: #eef4fb;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-row-description {
+  color: #7a8698;
+  font-size: 12px;
+}
+
+.settings-pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(87, 194, 108, 0.12);
+  color: #8fd19e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-card switch {
+  min-width: 40px;
+  min-height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+}
+
+.settings-card switch:checked {
+  background: #2f7fc1;
+}
+
+.settings-card switch image {
+  opacity: 0;
+}
+
+.settings-card switch slider {
+  min-width: 18px;
+  min-height: 18px;
+  margin: 2px;
+  border: none;
+  border-radius: 999px;
+  background: #eef4fb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.settings-editor-card {
+  margin-bottom: 0;
+}
+
+.settings-editor-header {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-editor-language {
+  color: #6f7887;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.settings-editor-status,
+.settings-editor-hint {
+  color: #6f7887;
+  font-size: 11px;
+}
+
+.settings-editor,
+.settings-editor text {
+  background: transparent;
   color: #eef4fb;
 }
 
-.repo-settings-actions {
-  margin-top: 14px;
+.settings-editor-footer {
+  padding: 9px 10px 9px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.repo-settings-status {
-  color: #6f7887;
+.settings-save {
+  min-height: 28px;
+  padding: 0 16px;
+  background: rgba(126, 203, 255, 0.10);
+  color: #b6dcff;
+  border: 1px solid rgba(143, 202, 255, 0.28);
+  border-radius: 9px;
   font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-save:hover {
+  background: rgba(126, 203, 255, 0.18);
+  color: #eaf5ff;
+}
+
+.settings-save:disabled {
+  background: transparent;
+  color: #566172;
+  border-color: rgba(255, 255, 255, 0.08);
 }
 
 .repo-row-hover .repo-status {
@@ -811,7 +922,7 @@ fn render_ui(
         .and_then(|repo| groups.iter().find(|group| &group.repo_canonical == repo))
         .cloned();
     if let Some(group) = settings_group {
-        detail_widgets.render_repository_settings(&group);
+        detail_widgets.render_repository_settings(state, &group);
         render_sidebar_content(groups, state, detail_widgets, None);
         return;
     }
@@ -1381,14 +1492,7 @@ fn render_sidebar_content(
             .syncing_repositories
             .borrow()
             .contains(&group.repo_canonical);
-        let repo_row = build_repo_row(
-            &state,
-            &group.repo_label,
-            &group.repo_canonical,
-            group.repo_status.as_deref(),
-            is_syncing,
-            group.collapsed,
-        );
+        let repo_row = build_repo_row(&state, group, is_syncing);
         sidebar_append_static_row(&list, &repo_row);
 
         if !group.collapsed {
@@ -1721,14 +1825,11 @@ fn focus_repository_form_field(state: &Rc<AppState>) {
     });
 }
 
-fn build_repo_row(
-    state: &Rc<AppState>,
-    repo_label: &str,
-    repo_canonical: &str,
-    repo_status: Option<&str>,
-    is_syncing: bool,
-    collapsed: bool,
-) -> GtkBox {
+fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool) -> GtkBox {
+    let repo_label = group.repo_label.as_str();
+    let repo_canonical = group.repo_canonical.as_str();
+    let repo_status = group.repo_status.as_deref();
+    let collapsed = group.collapsed;
     let row = GtkBox::new(Orientation::Horizontal, 0);
     row.set_halign(Align::Fill);
     row.set_hexpand(true);
@@ -1826,10 +1927,11 @@ fn build_repo_row(
     }
 
     let is_creating = state.creating_workspaces.borrow().contains(repo_canonical);
-    let local_button =
-        build_new_workspace_button(state, repo_canonical, SandboxKind::Local, is_creating);
-    let exedev_button =
-        build_new_workspace_button(state, repo_canonical, SandboxKind::ExeDev, is_creating);
+    let new_workspace_buttons = [SandboxKind::Local]
+        .iter()
+        .chain(&group.remote_sandboxes)
+        .map(|sandbox| build_new_workspace_button(state, repo_canonical, *sandbox, is_creating))
+        .collect::<Vec<_>>();
 
     let toggle_button = Button::new();
     toggle_button.set_valign(Align::Center);
@@ -1872,10 +1974,33 @@ fn build_repo_row(
 
     row.append(&settings_button);
     row.append(&sync_button);
-    row.append(&local_button);
-    row.append(&exedev_button);
+    for button in &new_workspace_buttons {
+        row.append(button);
+    }
     row.append(&toggle_button);
     row
+}
+
+/// Records that a remote sandbox was enabled or disabled for a repository and
+/// updates its new-workspace buttons.
+pub(crate) fn apply_sandbox_enabled(
+    state: &Rc<AppState>,
+    repo_canonical: &str,
+    sandbox: SandboxKind,
+    enabled: bool,
+) {
+    if let Some(group) = state
+        .workspace_groups
+        .borrow_mut()
+        .iter_mut()
+        .find(|group| group.repo_canonical == repo_canonical)
+    {
+        group.remote_sandboxes.retain(|enabled| *enabled != sandbox);
+        if enabled {
+            group.remote_sandboxes.push(sandbox);
+        }
+    }
+    schedule_render_sidebar_only(state);
 }
 
 fn toggle_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {

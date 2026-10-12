@@ -40,6 +40,18 @@ pub enum RepoSubcommand {
         #[arg(long)]
         json: bool,
     },
+    /// Enable an integration, such as a remote sandbox, for a repository.
+    Enable {
+        repository: String,
+        #[arg(value_parser = ["exedev"])]
+        integration: String,
+    },
+    /// Disable an integration for a repository.
+    Disable {
+        repository: String,
+        #[arg(value_parser = ["exedev"])]
+        integration: String,
+    },
 }
 
 #[derive(Debug, Parser)]

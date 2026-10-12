@@ -9,7 +9,7 @@ use std::{
 };
 use turso::{Builder, Connection};
 
-use crate::{SplayError, database_error, legacy};
+use crate::{SplayError, database_error, legacy, sandbox::SandboxKind};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Repository {
@@ -149,6 +149,14 @@ impl RepositoryStore {
             ON repos(alias)
             WHERE alias IS NOT NULL;
 
+            CREATE TABLE IF NOT EXISTS repo_integrations (
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                integration TEXT NOT NULL,
+                PRIMARY KEY (host, owner, name, integration)
+            );
+
             CREATE TABLE IF NOT EXISTS workspace_usage (
                 repository TEXT NOT NULL,
                 workspace TEXT NOT NULL,
@@ -167,7 +175,79 @@ impl RepositoryStore {
         Ok(Self { paths, conn })
     }
 
-    /// Returns the script that sets up new exe.dev workspaces of `repository`.
+    /// Returns the remote sandboxes enabled for `repo`.
+    pub async fn enabled_sandboxes(
+        &self,
+        repo: &Repository,
+    ) -> Result<Vec<SandboxKind>, SplayError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT integration
+                 FROM repo_integrations
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3
+                 ORDER BY integration",
+            )
+            .await?;
+        let mut rows = stmt
+            .query((repo.host.as_str(), repo.owner.as_str(), repo.name.as_str()))
+            .await?;
+        let mut sandboxes = Vec::new();
+
+        while let Some(row) = rows.next().await? {
+            // Skip integrations this version does not know about.
+            if let Ok(sandbox) = SandboxKind::parse(&row.get::<String>(0)?)
+                && sandbox != SandboxKind::Local
+            {
+                sandboxes.push(sandbox);
+            }
+        }
+
+        Ok(sandboxes)
+    }
+
+    /// Enables or disables a remote sandbox for `repository`.
+    pub async fn set_sandbox_enabled(
+        &self,
+        repository: &str,
+        sandbox: SandboxKind,
+        enabled: bool,
+    ) -> Result<(), SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        if sandbox == SandboxKind::Local {
+            return Err(SplayError::InvalidSandbox(sandbox.to_string()));
+        }
+
+        let key = (
+            repo.host.as_str(),
+            repo.owner.as_str(),
+            repo.name.as_str(),
+            sandbox.as_str(),
+        );
+        self.conn
+            .execute(
+                "DELETE FROM repo_integrations
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3 AND integration = ?4",
+                key,
+            )
+            .await?;
+        if enabled {
+            self.conn
+                .execute(
+                    "INSERT INTO repo_integrations (host, owner, name, integration)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    key,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the script that sets up new remote workspaces of `repository`.
     pub async fn setup_script(&self, repository: &str) -> Result<Option<String>, SplayError> {
         let repo = self
             .resolve(repository)

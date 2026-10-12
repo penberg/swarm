@@ -129,10 +129,10 @@ impl SessionStore {
     }
 
     /// Starts the session a new workspace opens with: a shell, preceded by
-    /// the repository's setup script on exe.dev.
+    /// the repository's setup script in remote sandboxes.
     pub async fn create_initial(&self, workspace: &Workspace) -> Result<Session, SplayError> {
         let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-        let setup_script = if workspace.sandbox == SandboxKind::ExeDev {
+        let setup_script = if workspace.sandbox != SandboxKind::Local {
             self.repos.setup_script(&workspace.repository).await?
         } else {
             None

@@ -218,7 +218,7 @@ impl DetailWidgets {
         self.track_session_programs(&workspace.sessions);
     }
 
-    pub fn render_repository_settings(&self, group: &WorkspaceGroup) {
+    pub fn render_repository_settings(&self, state: &Rc<AppState>, group: &WorkspaceGroup) {
         // Keep an open settings page as is, so refreshes do not discard edits.
         let page_name = format!("settings:{}", group.repo_canonical);
         if self.session_stack.child_by_name(&page_name).is_some() {
@@ -229,7 +229,7 @@ impl DetailWidgets {
         clear_stack(&self.session_stack);
         self.track_session_programs(&[]);
 
-        let page = build_repository_settings(group);
+        let page = build_repository_settings(state, group);
         self.session_stack
             .add_titled(&page, Some(&page_name), "settings");
     }

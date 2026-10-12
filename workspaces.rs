@@ -68,6 +68,18 @@ impl WorkspaceStore {
             .resolve_repository(repository)
             .await?
             .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        if sandbox_kind != SandboxKind::Local
+            && !self
+                .repos
+                .enabled_sandboxes(&repo)
+                .await?
+                .contains(&sandbox_kind)
+        {
+            return Err(SplayError::SandboxNotEnabled {
+                repository: repo.alias.clone().unwrap_or_else(|| repo.canonical()),
+                sandbox: sandbox_kind.to_string(),
+            });
+        }
         let db = self.open_repo_db(&repo).await?;
         progress("Syncing repository");
         let default_branch = self.ensure_bare_repo(&repo)?;
@@ -952,7 +964,9 @@ mod tests {
         build_clone_worktree_add_args, build_worktree_add_args, migrate_repo_db,
         render_git_failure, run_git,
     };
-    use crate::{repos::RepositoryStore, workspaces::WorkspaceStore};
+    use crate::{
+        SplayError, repos::RepositoryStore, sandbox::SandboxKind, workspaces::WorkspaceStore,
+    };
 
     #[test]
     fn default_branch_workspace_is_reset_to_origin_tip() {
@@ -1181,6 +1195,42 @@ mod tests {
 
         repos.set_setup_script("splay", "  \n").await.unwrap();
         assert_eq!(repos.setup_script("splay").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn remote_sandboxes_are_enabled_per_repository() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let data_home = unique_temp_path("splay-test-data-home");
+        fs::create_dir_all(&data_home).unwrap();
+        let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
+
+        let repos = RepositoryStore::open().await.unwrap();
+        let repo = repos.add("github/penberg/splay", None).await.unwrap();
+        assert!(repos.enabled_sandboxes(&repo).await.unwrap().is_empty());
+
+        // Enabling twice keeps a single entry.
+        for _ in 0..2 {
+            repos
+                .set_sandbox_enabled("splay", SandboxKind::ExeDev, true)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            repos.enabled_sandboxes(&repo).await.unwrap(),
+            vec![SandboxKind::ExeDev]
+        );
+
+        let workspaces = WorkspaceStore::open().await.unwrap();
+        repos
+            .set_sandbox_enabled("splay", SandboxKind::ExeDev, false)
+            .await
+            .unwrap();
+        assert!(repos.enabled_sandboxes(&repo).await.unwrap().is_empty());
+        let err = workspaces
+            .create("splay", None, SandboxKind::ExeDev, &|_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SplayError::SandboxNotEnabled { .. }));
     }
 
     #[tokio::test]

@@ -67,6 +67,11 @@ pub enum SplayError {
     #[error("invalid sandbox `{0}`; expected local or exedev")]
     InvalidSandbox(String),
 
+    #[error(
+        "{sandbox} is not enabled for repository `{repository}`; enable it with `splayctl repo enable {repository} {sandbox}`"
+    )]
+    SandboxNotEnabled { repository: String, sandbox: String },
+
     #[error("sandbox command failed: {0}")]
     Sandbox(String),
 
