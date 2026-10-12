@@ -1,20 +1,25 @@
 use std::{
-    fs,
+    fs::{self, File},
+    io::Write,
     process::{Command, Output, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
     SplayError,
     repos::Repository,
-    sandbox::{Checkout, CreateRequest, RepoPaths, Sandbox},
+    sandbox::{Checkout, CreateRequest, RepoPaths, Sandbox, TemplateRequest},
     sessions::default_session_command,
     workspaces::Workspace,
 };
 
 const CONTROL_HOST: &str = "exe.dev";
 const VM_DOMAIN: &str = "exe.xyz";
+/// Disk size of template VMs, which their copies inherit. Builds of large
+/// projects outgrow exe.dev's default disk; usage beyond the plan's included
+/// disk is billed, not the size.
+const TEMPLATE_DISK: &str = "60GB";
 const SSH_CONNECT_ATTEMPTS: u32 = 5;
 const SSH_CONNECT_RETRY_DELAY: Duration = Duration::from_secs(2);
 /// Exit status `ssh` reports for its own failures, as opposed to the remote command's.
@@ -22,30 +27,31 @@ const SSH_ERROR_STATUS: i32 = 255;
 
 /// One exe.dev VM per workspace, managed over `ssh exe.dev`.
 ///
-/// The repository is cloned into `~/<repo name>` on the VM. The workspace's
-/// local directory stays empty and serves as the session supervisor's
-/// working directory.
+/// Each repository has a template VM with the repository cloned into
+/// `~/<repo name>` and the setup script run. A workspace's VM is a copy of the
+/// template, so creating one takes seconds. The workspace's local directory
+/// stays empty and serves as the session supervisor's working directory.
 pub struct ExeDev;
 
 impl Sandbox for ExeDev {
     fn create(&self, request: &CreateRequest) -> Result<Checkout, SplayError> {
+        let template = request.template.ok_or_else(|| {
+            SplayError::Sandbox("exe.dev workspaces are created from a template".to_string())
+        })?;
         let vm = vm_name(request.repo, request.workspace_name);
         fs::create_dir_all(request.workspace_path)?;
 
-        (request.progress)("Creating VM");
-        if let Err(err) = control(["new".to_string(), format!("--name={vm}")]) {
+        (request.progress)("Copying template");
+        if let Err(err) = control(["cp".to_string(), template.to_string(), vm.clone()]) {
             let _ = fs::remove_dir_all(request.workspace_path);
             return Err(err);
         }
 
-        (request.progress)("Cloning repository");
-        let dir = checkout_dir(request.repo);
+        (request.progress)("Updating checkout");
+        let dir = shell_quote(&checkout_dir(request.repo));
         let script = format!(
-            "GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git clone {url} {dir} && git -C {dir} switch -c {branch} origin/{default_branch}",
-            url = shell_quote(&request.repo.remote_url()),
-            dir = shell_quote(&dir),
+            "cd {dir} && GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git fetch -q origin && git switch -q -c {branch} origin/HEAD",
             branch = shell_quote(request.workspace_name),
-            default_branch = shell_quote(request.default_branch),
         );
         if let Err(err) = vm_exec(&vm, &script) {
             let _ = control(["rm".to_string(), vm.clone()]);
@@ -57,6 +63,62 @@ impl Sandbox for ExeDev {
             branch: request.workspace_name.to_string(),
             sandbox_ref: Some(vm),
         })
+    }
+
+    fn new_template_name(&self, repo: &Repository) -> String {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        vm_name(repo, &format!("template-{timestamp}"))
+    }
+
+    fn build_template(&self, request: &TemplateRequest) -> Result<(), SplayError> {
+        let vm = request.name;
+        let dir = shell_quote(&checkout_dir(request.repo));
+
+        log_step(request.log, &format!("Creating VM {vm}"))?;
+        control_logged(
+            [
+                "new".to_string(),
+                format!("--name={vm}"),
+                format!("--disk={TEMPLATE_DISK}"),
+            ],
+            request.log,
+        )?;
+
+        log_step(
+            request.log,
+            &format!("Cloning {}", request.repo.remote_url()),
+        )?;
+        vm_exec_logged(
+            vm,
+            &format!(
+                "GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=accept-new' git clone {url} {dir}",
+                url = shell_quote(&request.repo.remote_url()),
+            ),
+            request.log,
+        )?;
+
+        if let Some(script) = request.setup_script {
+            log_step(request.log, "Running setup script")?;
+            vm_exec_logged(
+                vm,
+                &format!("cd {dir} && bash -lc {} setup", shell_quote(script)),
+                request.log,
+            )?;
+        }
+
+        // Copies snapshot the disk, so anything still only in memory would
+        // be missing from them, leaving e.g. a corrupt git index.
+        log_step(request.log, "Flushing the disk")?;
+        vm_exec_logged(vm, "sync", request.log)?;
+
+        Ok(())
+    }
+
+    fn destroy_template(&self, name: &str) -> Result<(), SplayError> {
+        control(["rm".to_string(), name.to_string()]).map(|_| ())
     }
 
     fn destroy(&self, workspace: &Workspace, _paths: &RepoPaths) -> Result<(), SplayError> {
@@ -170,6 +232,66 @@ fn vm_exec(vm: &str, script: &str) -> Result<String, SplayError> {
         }
 
         return check_output(output);
+    }
+}
+
+fn log_step(log: &File, step: &str) -> Result<(), SplayError> {
+    writeln!(&*log, "==> {step}")?;
+    Ok(())
+}
+
+/// Runs an exe.dev control command with its output going to `log`.
+fn control_logged<I>(args: I, log: &File) -> Result<(), SplayError>
+where
+    I: IntoIterator<Item = String>,
+{
+    let status = Command::new("ssh")
+        .args(["-o", "BatchMode=yes", CONTROL_HOST])
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log.try_clone()?)
+        .status()?;
+    if !status.success() {
+        return Err(SplayError::Sandbox(format!(
+            "`ssh {CONTROL_HOST}` failed with {status}"
+        )));
+    }
+    Ok(())
+}
+
+/// Runs a shell script on the VM with its output going to `log`, retrying
+/// while the VM's SSH server comes up.
+fn vm_exec_logged(vm: &str, script: &str, log: &File) -> Result<(), SplayError> {
+    let host = vm_host(vm);
+    let mut attempt = 1;
+    loop {
+        let status = Command::new("ssh")
+            .args([
+                "-A",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                &host,
+                script,
+            ])
+            .stdin(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log.try_clone()?)
+            .status()?;
+
+        if status.code() == Some(SSH_ERROR_STATUS) && attempt < SSH_CONNECT_ATTEMPTS {
+            attempt += 1;
+            thread::sleep(SSH_CONNECT_RETRY_DELAY);
+            continue;
+        }
+        if !status.success() {
+            return Err(SplayError::Sandbox(format!(
+                "command on {vm} failed with {status}"
+            )));
+        }
+        return Ok(());
     }
 }
 

@@ -3,6 +3,7 @@ use crate::{
     opts::{RepoCommand, RepoSubcommand},
     repos::RepositoryStore,
     sandbox::SandboxKind,
+    templates,
 };
 
 pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
@@ -42,19 +43,59 @@ pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
             repository,
             integration,
         } => {
-            store
-                .set_sandbox_enabled(&repository, SandboxKind::parse(&integration)?, true)
-                .await?;
-            println!("Enabled {integration} for {repository}");
+            templates::set_sandbox_enabled(
+                &store,
+                &repository,
+                SandboxKind::parse(&integration)?,
+                true,
+            )
+            .await?;
+            println!("Enabled {integration} for {repository}; building its template");
         }
         RepoSubcommand::Disable {
             repository,
             integration,
         } => {
-            store
-                .set_sandbox_enabled(&repository, SandboxKind::parse(&integration)?, false)
-                .await?;
+            templates::set_sandbox_enabled(
+                &store,
+                &repository,
+                SandboxKind::parse(&integration)?,
+                false,
+            )
+            .await?;
             println!("Disabled {integration} for {repository}");
+        }
+        RepoSubcommand::Template {
+            repository,
+            sandbox,
+            rebuild,
+        } => {
+            let sandbox = SandboxKind::parse(&sandbox)?;
+            let repo = store
+                .resolve_repository(&repository)
+                .await?
+                .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
+            if rebuild {
+                templates::rebuild(&store, &repo, sandbox)?;
+            }
+
+            let status = templates::status(&store, &repo, sandbox);
+            match &status.ready {
+                Some(ready) => println!("Template: {} (built at {})", ready.name, ready.built_at),
+                None => println!("Template: none"),
+            }
+            if let Some(since) = status.building_since {
+                println!("Building since {since}");
+            }
+            if let Some(error) = &status.error {
+                println!("Last build failed: {error}");
+            }
+        }
+        RepoSubcommand::BuildTemplate {
+            repository,
+            sandbox,
+        } => {
+            templates::run_build(&repository, SandboxKind::parse(&sandbox)?).await?;
         }
     }
 

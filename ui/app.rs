@@ -11,6 +11,7 @@ use splay::{
     SplayError,
     forges::github::{self, PullRequestStatus, PullRequestStatusState},
     sandbox::SandboxKind,
+    templates::TemplateStatus,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -24,9 +25,10 @@ use tokio::sync::mpsc;
 use crate::{
     data::{
         Provisioning, WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace,
-        create_workspace, current_workspace_branch, load_workspace_groups, mark_workspace_used,
-        read_workspace_head, remove_workspace, rename_workspace, set_all_repositories_collapsed,
-        set_repository_collapsed, sync_repository, workspace_head_path,
+        create_workspace, current_workspace_branch, load_template_statuses, load_workspace_groups,
+        mark_workspace_used, read_workspace_head, remove_workspace, rename_workspace,
+        set_all_repositories_collapsed, set_repository_collapsed, sync_repository,
+        workspace_head_path,
     },
     exec,
     workspace_panel::DetailWidgets,
@@ -233,6 +235,12 @@ window {
   color: #b6dcff;
 }
 
+.repo-template-spinner {
+  min-width: 14px;
+  min-height: 14px;
+  -gtk-icon-size: 14px;
+}
+
 .repo-row-selected .repo-settings-button {
   color: #b6dcff;
 }
@@ -285,6 +293,55 @@ window {
 
 .settings-card:disabled {
   opacity: 0.45;
+}
+
+.settings-template {
+  padding: 2px 16px 14px 66px;
+}
+
+.settings-template-status {
+  padding: 10px 0;
+}
+
+.settings-template-icon {
+  min-width: 18px;
+  min-height: 18px;
+}
+
+.settings-template-icon spinner {
+  min-width: 16px;
+  min-height: 16px;
+  -gtk-icon-size: 16px;
+}
+
+.settings-template-ready {
+  color: #57c26c;
+}
+
+.settings-template-failed {
+  color: #e06767;
+}
+
+.settings-template-none {
+  color: #6f7887;
+}
+
+.settings-template-expander {
+  color: #7a8698;
+  font-size: 12px;
+}
+
+.settings-template-log-frame {
+  margin-top: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+}
+
+.settings-template-log,
+.settings-template-log text {
+  background: rgba(0, 0, 0, 0.18);
+  color: #c3ccd9;
+  font-size: 11px;
 }
 
 .settings-notice {
@@ -827,6 +884,7 @@ fn build_ui(app: &Application) {
         next_provisioning_id: Cell::new(1),
         removing_workspaces: RefCell::new(HashSet::new()),
         settings_repository: RefCell::new(None),
+        polling_templates: Cell::new(false),
     });
 
     let sidebar_widgets = build_sidebar_widgets(&state);
@@ -843,6 +901,7 @@ fn build_ui(app: &Application) {
 
     install_session_cycle_shortcuts(&window, &state);
     install_pr_status_scheduler(&state);
+    install_template_poller(&state);
     refresh_ui(&state, None, None);
 
     window.present();
@@ -875,6 +934,8 @@ pub struct AppState {
     removing_workspaces: RefCell<HashSet<String>>,
     /// Repository whose settings page is open in place of a workspace.
     settings_repository: RefCell<Option<String>>,
+    /// Whether a template status refresh is in flight.
+    polling_templates: Cell<bool>,
 }
 
 #[derive(Clone)]
@@ -2012,7 +2073,15 @@ fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool
     let new_workspace_buttons = [SandboxKind::Local]
         .iter()
         .chain(&group.remote_sandboxes)
-        .map(|sandbox| build_new_workspace_button(state, repo_canonical, *sandbox, is_creating))
+        .map(|sandbox| {
+            build_new_workspace_button(
+                state,
+                repo_canonical,
+                *sandbox,
+                group.template(*sandbox),
+                is_creating,
+            )
+        })
         .collect::<Vec<_>>();
 
     let toggle_button = Button::new();
@@ -2065,11 +2134,13 @@ fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool
 
 /// Records that a remote sandbox was enabled or disabled for a repository and
 /// updates its new-workspace buttons.
+/// Records a remote sandbox's template status, `None` meaning the sandbox
+/// is disabled, and updates the repository's new-workspace buttons.
 pub(crate) fn apply_sandbox_enabled(
     state: &Rc<AppState>,
     repo_canonical: &str,
     sandbox: SandboxKind,
-    enabled: bool,
+    template: Option<TemplateStatus>,
 ) {
     if let Some(group) = state
         .workspace_groups
@@ -2078,11 +2149,72 @@ pub(crate) fn apply_sandbox_enabled(
         .find(|group| group.repo_canonical == repo_canonical)
     {
         group.remote_sandboxes.retain(|enabled| *enabled != sandbox);
-        if enabled {
+        group.templates.retain(|(kind, _)| *kind != sandbox);
+        if let Some(template) = template {
             group.remote_sandboxes.push(sandbox);
+            group.templates.push((sandbox, template));
         }
     }
     schedule_render_sidebar_only(state);
+}
+
+/// Refreshes the template statuses of repositories whose templates are
+/// being built, so that their new-workspace buttons turn on when ready.
+fn install_template_poller(state: &Rc<AppState>) {
+    let state = state.clone();
+    glib::timeout_add_local(Duration::from_secs(2), move || {
+        poll_building_templates(&state);
+        glib::ControlFlow::Continue
+    });
+}
+
+fn poll_building_templates(state: &Rc<AppState>) {
+    if state.polling_templates.get() {
+        return;
+    }
+    let building = state
+        .workspace_groups
+        .borrow()
+        .iter()
+        .filter(|group| {
+            group
+                .templates
+                .iter()
+                .any(|(_, template)| template.is_building())
+        })
+        .map(|group| (group.repo_canonical.clone(), group.remote_sandboxes.clone()))
+        .collect::<Vec<_>>();
+    if building.is_empty() {
+        return;
+    }
+
+    state.polling_templates.set(true);
+    let state = state.clone();
+    exec::dispatch(load_template_statuses(building), move |result| {
+        state.polling_templates.set(false);
+        let statuses = match result {
+            Ok(statuses) => statuses,
+            Err(err) => {
+                eprintln!("failed to refresh template statuses: {err}");
+                return;
+            }
+        };
+
+        let mut changed = false;
+        for group in state.workspace_groups.borrow_mut().iter_mut() {
+            if let Some((_, templates)) = statuses
+                .iter()
+                .find(|(repository, _)| *repository == group.repo_canonical)
+                && group.templates != *templates
+            {
+                group.templates = templates.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            schedule_render_sidebar_only(&state);
+        }
+    });
 }
 
 fn toggle_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
@@ -2103,19 +2235,53 @@ fn build_new_workspace_button(
     state: &Rc<AppState>,
     repo_canonical: &str,
     sandbox: SandboxKind,
+    template: Option<&TemplateStatus>,
     is_creating: bool,
 ) -> Button {
     let button = Button::new();
     button.set_valign(Align::Center);
     button.add_css_class("repo-add");
-    button.set_sensitive(!is_creating);
-    button.set_tooltip_text(Some(match sandbox {
-        SandboxKind::Local => "New local workspace",
-        SandboxKind::ExeDev => "New remote workspace",
-    }));
-    let icon = Image::from_icon_name(sandbox_icon_name(sandbox));
-    icon.set_pixel_size(14);
-    button.set_child(Some(&icon));
+
+    // Remote workspaces are copies of the sandbox's template, so they can
+    // only be created once it is built.
+    let (ready, building, tooltip) = match (sandbox, template) {
+        (SandboxKind::Local, _) => (true, false, "New local workspace".to_string()),
+        (_, Some(template)) if template.ready.is_some() => {
+            (true, false, "New remote workspace".to_string())
+        }
+        (_, Some(template)) if template.is_building() => (
+            false,
+            true,
+            "Preparing remote workspaces: building the template".to_string(),
+        ),
+        (
+            _,
+            Some(TemplateStatus {
+                error: Some(error), ..
+            }),
+        ) => (
+            false,
+            false,
+            format!("The remote workspace template failed to build: {error}"),
+        ),
+        _ => (
+            false,
+            false,
+            "No remote workspace template; build it from the repository settings".to_string(),
+        ),
+    };
+    button.set_sensitive(ready && !is_creating);
+    button.set_tooltip_text(Some(&tooltip));
+    if building {
+        let spinner = Spinner::new();
+        spinner.add_css_class("repo-template-spinner");
+        spinner.start();
+        button.set_child(Some(&spinner));
+    } else {
+        let icon = Image::from_icon_name(sandbox_icon_name(sandbox));
+        icon.set_pixel_size(14);
+        button.set_child(Some(&icon));
+    }
 
     let state = state.clone();
     let repo_canonical = repo_canonical.to_string();

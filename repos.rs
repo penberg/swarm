@@ -5,9 +5,9 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use turso::{Builder, Connection};
+use turso::{Builder, Connection, Database};
 
 use crate::{SplayError, database_error, legacy, sandbox::SandboxKind};
 
@@ -108,6 +108,9 @@ impl SplayPaths {
     }
 }
 
+const INDEX_DB_OPEN_ATTEMPTS: u32 = 40;
+const INDEX_DB_OPEN_RETRY_DELAY: Duration = Duration::from_millis(50);
+
 pub struct RepositoryStore {
     paths: SplayPaths,
     conn: Connection,
@@ -123,10 +126,7 @@ impl RepositoryStore {
         fs::create_dir_all(&paths.repos_dir)?;
 
         let index_db_path = paths.index_db_path.clone();
-        let db = Builder::new_local(path_to_string(&paths.index_db_path)?)
-            .build()
-            .await
-            .map_err(|err| database_error(&index_db_path, "open", err))?;
+        let db = open_index_db(&index_db_path).await?;
         let conn = db
             .connect()
             .map_err(|err| database_error(&index_db_path, "connect", err))?;
@@ -732,6 +732,23 @@ impl RepositoryStore {
             .await?;
 
         Ok(Repository { collapsed, ..repo })
+    }
+}
+
+/// Opens the index database. A process holds the database file locked while
+/// it has it open, so wait briefly for other Splay processes, such as a
+/// template builder, to close it.
+async fn open_index_db(path: &Path) -> Result<Database, SplayError> {
+    let mut attempt = 1;
+    loop {
+        match Builder::new_local(path_to_string(path)?).build().await {
+            Ok(db) => return Ok(db),
+            Err(err) if attempt < INDEX_DB_OPEN_ATTEMPTS && err.to_string().contains("lock") => {
+                attempt += 1;
+                tokio::time::sleep(INDEX_DB_OPEN_RETRY_DELAY).await;
+            }
+            Err(err) => return Err(database_error(path, "open", err)),
+        }
     }
 }
 

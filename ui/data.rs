@@ -3,6 +3,7 @@ use splay::{
     repos::{Repository, RepositoryStore},
     sandbox::SandboxKind,
     sessions::{SessionStore, default_session_command},
+    templates::{self, TemplateStatus},
     workspaces::{Workspace, WorkspaceStore},
 };
 use std::{
@@ -23,6 +24,17 @@ pub struct WorkspaceGroup {
     pub workspaces: Vec<WorkspaceEntry>,
     /// Remote sandboxes enabled for the repository.
     pub remote_sandboxes: Vec<SandboxKind>,
+    /// Templates of the enabled remote sandboxes.
+    pub templates: Vec<(SandboxKind, TemplateStatus)>,
+}
+
+impl WorkspaceGroup {
+    pub fn template(&self, sandbox: SandboxKind) -> Option<&TemplateStatus> {
+        self.templates
+            .iter()
+            .find(|(kind, _)| *kind == sandbox)
+            .map(|(_, status)| status)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +92,10 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
         let repo_status = repo_sync_status(&repo_store, &repo);
         let workspace_last_used = repo_store.workspace_last_used(&repo).await?;
         let remote_sandboxes = repo_store.enabled_sandboxes(&repo).await?;
+        let templates = remote_sandboxes
+            .iter()
+            .map(|sandbox| (*sandbox, templates::status(&repo_store, &repo, *sandbox)))
+            .collect();
         let workspaces = workspace_store.list(&repo_canonical).await?;
         let workspaces = workspaces.into_iter().map(|workspace| async {
             let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
@@ -137,6 +153,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
             workspace_count,
             workspaces: workspace_entries,
             remote_sandboxes,
+            templates,
         });
     }
 
@@ -233,18 +250,69 @@ pub async fn load_repository_settings(
 
 pub async fn save_setup_script(repository: String, script: String) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
-    repo_store.set_setup_script(&repository, &script).await
+    templates::set_setup_script(&repo_store, &repository, &script).await
 }
 
+/// Enables or disables a remote sandbox and returns its template's status.
 pub async fn set_sandbox_enabled(
     repository: String,
     sandbox: SandboxKind,
     enabled: bool,
-) -> Result<(), SplayError> {
+) -> Result<TemplateStatus, SplayError> {
     let repo_store = RepositoryStore::open().await?;
+    templates::set_sandbox_enabled(&repo_store, &repository, sandbox, enabled).await?;
+    let repo = resolve_repository(&repo_store, &repository).await?;
+    Ok(templates::status(&repo_store, &repo, sandbox))
+}
+
+pub async fn rebuild_template(
+    repository: String,
+    sandbox: SandboxKind,
+) -> Result<TemplateStatus, SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    let repo = resolve_repository(&repo_store, &repository).await?;
+    templates::rebuild(&repo_store, &repo, sandbox)?;
+    Ok(templates::status(&repo_store, &repo, sandbox))
+}
+
+/// Returns a template's status with the end of its latest build's output.
+pub async fn load_template(
+    repository: String,
+    sandbox: SandboxKind,
+) -> Result<(TemplateStatus, String), SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    let repo = resolve_repository(&repo_store, &repository).await?;
+    Ok((
+        templates::status(&repo_store, &repo, sandbox),
+        templates::build_log(&repo_store, &repo, sandbox),
+    ))
+}
+
+/// Returns the template statuses of the given repositories' remote sandboxes.
+pub async fn load_template_statuses(
+    repositories: Vec<(String, Vec<SandboxKind>)>,
+) -> Result<Vec<(String, Vec<(SandboxKind, TemplateStatus)>)>, SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    let mut statuses = Vec::with_capacity(repositories.len());
+    for (repository, sandboxes) in repositories {
+        let repo = resolve_repository(&repo_store, &repository).await?;
+        let templates = sandboxes
+            .into_iter()
+            .map(|sandbox| (sandbox, templates::status(&repo_store, &repo, sandbox)))
+            .collect();
+        statuses.push((repository, templates));
+    }
+    Ok(statuses)
+}
+
+async fn resolve_repository(
+    repo_store: &RepositoryStore,
+    repository: &str,
+) -> Result<Repository, SplayError> {
     repo_store
-        .set_sandbox_enabled(&repository, sandbox, enabled)
-        .await
+        .resolve_repository(repository)
+        .await?
+        .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))
 }
 
 pub async fn add_repository(
@@ -533,6 +601,11 @@ fn unix_now() -> i64 {
 
 fn file_modified_time(path: PathBuf) -> Option<SystemTime> {
     fs::metadata(path).ok()?.modified().ok()
+}
+
+/// Formats a Unix timestamp relative to now, like "5 minutes ago".
+pub fn format_age(timestamp: i64) -> String {
+    format_relative_sync_time(UNIX_EPOCH + Duration::from_secs(timestamp.max(0) as u64))
 }
 
 fn format_relative_sync_time(timestamp: SystemTime) -> String {

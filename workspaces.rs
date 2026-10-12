@@ -11,6 +11,7 @@ use crate::{
     SplayError, database_error,
     repos::{Repository, RepositoryStore},
     sandbox::{CreateRequest, Progress, RepoPaths, SandboxKind, sandbox},
+    templates,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,9 +81,18 @@ impl WorkspaceStore {
                 sandbox: sandbox_kind.to_string(),
             });
         }
+        // Local workspaces branch off the freshly synced mirror; remote ones
+        // are copies of the sandbox's template, which fetches by itself.
+        let (default_branch, template) = if sandbox_kind == SandboxKind::Local {
+            progress("Syncing repository");
+            (Some(self.ensure_bare_repo(&repo)?), None)
+        } else {
+            (
+                None,
+                Some(ready_template(&self.repos, &repo, sandbox_kind)?),
+            )
+        };
         let db = self.open_repo_db(&repo).await?;
-        progress("Syncing repository");
-        let default_branch = self.ensure_bare_repo(&repo)?;
         let requested_name = resolve_workspace_name(name)?;
         let workspaces_dir = self.repos.workspaces_dir(&repo);
         fs::create_dir_all(&workspaces_dir)?;
@@ -100,7 +110,8 @@ impl WorkspaceStore {
             },
             workspace_path: &workspace_path,
             workspace_name: &workspace_name,
-            default_branch: &default_branch,
+            default_branch: default_branch.as_deref(),
+            template: template.as_deref(),
             progress,
         })?;
         let created_at = unix_timestamp();
@@ -663,6 +674,31 @@ impl WorkspaceStore {
 
         Ok(branch)
     }
+}
+
+/// Returns the template to copy a new `sandbox_kind` workspace of `repo` from.
+fn ready_template(
+    repos: &RepositoryStore,
+    repo: &Repository,
+    sandbox_kind: SandboxKind,
+) -> Result<String, SplayError> {
+    let status = templates::status(repos, repo, sandbox_kind);
+    if let Some(ready) = status.ready {
+        return Ok(ready.name);
+    }
+
+    let repository = repo.alias.clone().unwrap_or_else(|| repo.canonical());
+    Err(SplayError::TemplateNotReady(if status.is_building() {
+        format!(
+            "the {sandbox_kind} template of `{repository}` is still being built; try again when it is ready"
+        )
+    } else if let Some(error) = status.error {
+        format!("the {sandbox_kind} template of `{repository}` failed to build: {error}")
+    } else {
+        format!(
+            "`{repository}` has no {sandbox_kind} template; build it with `splayctl repo template {repository} --rebuild`"
+        )
+    }))
 }
 
 fn workspace_from_row(repo: &Repository, row: &Row) -> Result<Workspace, SplayError> {

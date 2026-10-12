@@ -1,18 +1,22 @@
 use gtk::{
-    Align, Box as GtkBox, Button, EventControllerKey, Image, Label, Orientation, PolicyType,
-    Revealer, RevealerTransitionType, ScrolledWindow, Stack, StackTransitionType, Switch,
-    TextBuffer, TextView, ToggleButton, Widget, WrapMode, gdk, glib, pango::EllipsizeMode,
-    prelude::*,
+    Align, Box as GtkBox, Button, EventControllerKey, Expander, Image, Label, Orientation,
+    PolicyType, Revealer, RevealerTransitionType, ScrolledWindow, Spinner, Stack,
+    StackTransitionType, Switch, TextBuffer, TextView, ToggleButton, Widget, WrapMode, gdk, glib,
+    pango::EllipsizeMode, prelude::*,
 };
-use splay::sandbox::SandboxKind;
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use splay::{sandbox::SandboxKind, templates::TemplateStatus};
+use std::{
+    cell::{Cell, RefCell},
+    rc::{Rc, Weak},
+    time::Duration,
+};
 
 use crate::{
     app::{AppState, apply_sandbox_enabled},
     clamp::Clamp,
     data::{
-        RepositoryDetails, WorkspaceGroup, load_repository_settings, save_setup_script,
-        set_sandbox_enabled,
+        RepositoryDetails, WorkspaceGroup, format_age, load_repository_settings, load_template,
+        rebuild_template, save_setup_script, set_sandbox_enabled,
     },
     exec,
 };
@@ -27,6 +31,9 @@ const REMOTE_SANDBOXES: [(SandboxKind, &str, &str); 1] = [(
 /// Widest the page gets, including its horizontal padding, so that rows stay
 /// readable on wide windows.
 const MAXIMUM_PAGE_WIDTH: i32 = 840;
+
+/// How often an open settings page refreshes template status and build output.
+const TEMPLATE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The GitHub mark from Primer Octicons (MIT).
 const GITHUB_MARK_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16"><path fill="#dfe6ef" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>"##;
@@ -279,8 +286,23 @@ fn build_sandboxing_tab(
     notice_revealer.set_transition_duration(150);
     notice_revealer.set_child(Some(&notice));
 
+    // Saving the script may start template builds, which the views then show.
+    let template_views: Rc<RefCell<Vec<Weak<TemplateView>>>> = Rc::default();
+    let on_script_saved: Rc<dyn Fn()> = {
+        let template_views = template_views.clone();
+        let state = state.clone();
+        let repository = group.repo_canonical.clone();
+        Rc::new(move || {
+            for view in template_views.borrow().iter() {
+                if let Some(current) = view.upgrade() {
+                    current.refresh_pending.set(true);
+                    refresh_template_view(view, &state, &repository, current.sandbox);
+                }
+            }
+        })
+    };
     let (setup_section, script_card, show_script) =
-        build_setup_script_section(&group.repo_canonical, &notice_revealer);
+        build_setup_script_section(&group.repo_canonical, &notice_revealer, on_script_saved);
     let show_providers_enabled: Rc<dyn Fn(bool)> = Rc::new(move |any_enabled| {
         notice_revealer.set_reveal_child(!any_enabled);
         script_card.set_sensitive(any_enabled);
@@ -288,7 +310,12 @@ fn build_sandboxing_tab(
     show_providers_enabled(!group.remote_sandboxes.is_empty());
 
     tab.append(&section_heading("Providers"));
-    tab.append(&build_providers_card(state, group, show_providers_enabled));
+    tab.append(&build_providers_card(
+        state,
+        group,
+        show_providers_enabled,
+        &template_views,
+    ));
     tab.append(&setup_section);
     (tab, show_script)
 }
@@ -297,6 +324,7 @@ fn build_providers_card(
     state: &Rc<AppState>,
     group: &WorkspaceGroup,
     show_providers_enabled: Rc<dyn Fn(bool)>,
+    template_views: &RefCell<Vec<Weak<TemplateView>>>,
 ) -> GtkBox {
     let card = GtkBox::new(Orientation::Vertical, 0);
     card.add_css_class("settings-card");
@@ -315,6 +343,22 @@ fn build_providers_card(
         }
         card.append(&row);
 
+        let (template_box, template_view) = build_template_view(
+            state,
+            &group.repo_canonical,
+            sandbox,
+            group.template(sandbox),
+        );
+        template_views
+            .borrow_mut()
+            .push(Rc::downgrade(&template_view));
+        let template_revealer = Revealer::new();
+        template_revealer.set_transition_type(RevealerTransitionType::SlideDown);
+        template_revealer.set_transition_duration(150);
+        template_revealer.set_child(Some(&template_box));
+        template_revealer.set_reveal_child(group.remote_sandboxes.contains(&sandbox));
+        card.append(&template_revealer);
+
         let state = state.clone();
         let repo_canonical = group.repo_canonical.clone();
         let enabled = enabled.clone();
@@ -326,10 +370,12 @@ fn build_providers_card(
             let repo_canonical = repo_canonical.clone();
             let enabled = enabled.clone();
             let show_providers_enabled = show_providers_enabled.clone();
+            let template_revealer = template_revealer.clone();
+            let template_view = template_view.clone();
             exec::dispatch(
                 set_sandbox_enabled(repo_canonical.clone(), sandbox, active),
                 move |result| match result {
-                    Ok(()) => {
+                    Ok(template) => {
                         toggle.set_state(active);
                         let mut enabled = enabled.borrow_mut();
                         enabled.retain(|kind| *kind != sandbox);
@@ -337,7 +383,16 @@ fn build_providers_card(
                             enabled.push(sandbox);
                         }
                         show_providers_enabled(!enabled.is_empty());
-                        apply_sandbox_enabled(&state, &repo_canonical, sandbox, active);
+                        template_view.enabled.set(active);
+                        template_view.refresh_pending.set(active);
+                        template_view.show(&template);
+                        template_revealer.set_reveal_child(active);
+                        apply_sandbox_enabled(
+                            &state,
+                            &repo_canonical,
+                            sandbox,
+                            active.then_some(template),
+                        );
                     }
                     Err(err) => {
                         eprintln!("failed to update {sandbox} for {repo_canonical}: {err}");
@@ -350,6 +405,303 @@ fn build_providers_card(
     }
 
     card
+}
+
+/// The parts of a provider's template section that change as its build goes.
+struct TemplateView {
+    status_icon: Stack,
+    spinner: Spinner,
+    title: Label,
+    detail: Label,
+    build_button: Button,
+    expander: Expander,
+    log_buffer: TextBuffer,
+    log_view: TextView,
+    /// Whether the provider is on, so that its status belongs in the sidebar.
+    enabled: Cell<bool>,
+    sandbox: SandboxKind,
+    /// The status shown, to tell when the sidebar needs updating.
+    shown: RefCell<Option<TemplateStatus>>,
+    /// Whether a refresh is due even though no build is running.
+    refresh_pending: Cell<bool>,
+    polling: Cell<bool>,
+}
+
+impl TemplateView {
+    fn show(&self, status: &TemplateStatus) {
+        let (icon, title, detail) = match status {
+            TemplateStatus {
+                building_since: Some(since),
+                ready,
+                ..
+            } => (
+                "building",
+                "Building template".to_string(),
+                if ready.is_some() {
+                    format!(
+                        "Started {}. New workspaces are copied from the current template until this one is ready.",
+                        format_age(*since)
+                    )
+                } else {
+                    format!(
+                        "Started {}. Remote workspaces can be created once it is ready.",
+                        format_age(*since)
+                    )
+                },
+            ),
+            TemplateStatus {
+                ready: Some(ready),
+                error: Some(error),
+                ..
+            } => (
+                "failed",
+                format!("Template built {}", format_age(ready.built_at)),
+                format!("Rebuilding it failed: {error}"),
+            ),
+            TemplateStatus {
+                ready: Some(ready), ..
+            } => (
+                "ready",
+                "Template ready".to_string(),
+                format!(
+                    "Built {}. New remote workspaces are copies of it.",
+                    format_age(ready.built_at)
+                ),
+            ),
+            TemplateStatus {
+                error: Some(error), ..
+            } => ("failed", "Template build failed".to_string(), error.clone()),
+            _ => (
+                "none",
+                "No template".to_string(),
+                "Build one to create remote workspaces.".to_string(),
+            ),
+        };
+
+        if icon == "building" {
+            self.spinner.start();
+        } else {
+            self.spinner.stop();
+        }
+        if icon == "failed" && self.shown.borrow().as_ref() != Some(status) {
+            self.expander.set_expanded(true);
+        }
+        self.status_icon.set_visible_child_name(icon);
+        self.title.set_text(&title);
+        self.detail.set_text(&detail);
+        self.build_button.set_sensitive(!status.is_building());
+        self.build_button.set_label(if status.ready.is_some() {
+            "Rebuild"
+        } else {
+            "Build"
+        });
+        *self.shown.borrow_mut() = Some(status.clone());
+    }
+
+    fn show_log(&self, log: &str) {
+        let current = self.log_buffer.text(
+            &self.log_buffer.start_iter(),
+            &self.log_buffer.end_iter(),
+            false,
+        );
+        if current == log {
+            return;
+        }
+        self.log_buffer.set_text(if log.is_empty() {
+            "No build output yet."
+        } else {
+            log
+        });
+        let log_view = self.log_view.clone();
+        let buffer = self.log_buffer.clone();
+        glib::idle_add_local_once(move || {
+            let mut end = buffer.end_iter();
+            log_view.scroll_to_iter(&mut end, 0.0, false, 0.0, 1.0);
+        });
+    }
+}
+
+/// Builds the section showing a provider's template under its switch. The
+/// section refreshes itself while it exists.
+fn build_template_view(
+    state: &Rc<AppState>,
+    repository: &str,
+    sandbox: SandboxKind,
+    initial: Option<&TemplateStatus>,
+) -> (GtkBox, Rc<TemplateView>) {
+    let container = GtkBox::new(Orientation::Vertical, 0);
+    container.add_css_class("settings-template");
+
+    let status_row = GtkBox::new(Orientation::Horizontal, 12);
+    status_row.add_css_class("settings-template-status");
+
+    let status_icon = Stack::new();
+    status_icon.set_valign(Align::Center);
+    status_icon.add_css_class("settings-template-icon");
+    let spinner = Spinner::new();
+    status_icon.add_named(&spinner, Some("building"));
+    for (name, icon_name, class) in [
+        ("ready", "object-select-symbolic", "settings-template-ready"),
+        (
+            "failed",
+            "dialog-error-symbolic",
+            "settings-template-failed",
+        ),
+        ("none", "content-loading-symbolic", "settings-template-none"),
+    ] {
+        let icon = Image::from_icon_name(icon_name);
+        icon.set_pixel_size(16);
+        icon.add_css_class(class);
+        status_icon.add_named(&icon, Some(name));
+    }
+    status_row.append(&status_icon);
+
+    let text = GtkBox::new(Orientation::Vertical, 2);
+    text.set_hexpand(true);
+    text.set_valign(Align::Center);
+    let title = Label::new(None);
+    title.set_xalign(0.0);
+    title.add_css_class("settings-row-title");
+    let detail = Label::new(None);
+    detail.set_xalign(0.0);
+    detail.set_wrap(true);
+    detail.set_selectable(true);
+    detail.add_css_class("settings-row-description");
+    text.append(&title);
+    text.append(&detail);
+    status_row.append(&text);
+
+    let build_button = Button::with_label("Rebuild");
+    build_button.set_valign(Align::Center);
+    build_button.add_css_class("settings-discard");
+    status_row.append(&build_button);
+    container.append(&status_row);
+
+    let log_buffer = TextBuffer::new(None);
+    let log_view = TextView::with_buffer(&log_buffer);
+    log_view.set_editable(false);
+    log_view.set_cursor_visible(false);
+    log_view.set_monospace(true);
+    log_view.set_wrap_mode(WrapMode::WordChar);
+    log_view.set_top_margin(10);
+    log_view.set_bottom_margin(10);
+    log_view.set_left_margin(12);
+    log_view.set_right_margin(12);
+    log_view.add_css_class("settings-template-log");
+    let log_scroller = ScrolledWindow::new();
+    log_scroller.set_policy(PolicyType::Never, PolicyType::Automatic);
+    log_scroller.set_min_content_height(220);
+    log_scroller.set_child(Some(&log_view));
+    log_scroller.add_css_class("settings-template-log-frame");
+
+    let expander = Expander::new(Some("Build output"));
+    expander.add_css_class("settings-template-expander");
+    expander.set_child(Some(&log_scroller));
+    container.append(&expander);
+
+    let view = Rc::new(TemplateView {
+        status_icon,
+        spinner,
+        title,
+        detail,
+        build_button: build_button.clone(),
+        expander,
+        log_buffer,
+        log_view,
+        enabled: Cell::new(initial.is_some()),
+        sandbox,
+        shown: RefCell::new(None),
+        refresh_pending: Cell::new(true),
+        polling: Cell::new(false),
+    });
+    view.show(initial.unwrap_or(&TemplateStatus::default()));
+
+    {
+        // Weak, as the view holds the button: a strong reference would keep
+        // both alive after the page is gone.
+        let view = Rc::downgrade(&view);
+        let state = state.clone();
+        let repository = repository.to_string();
+        build_button.connect_clicked(move |button| {
+            let Some(view) = view.upgrade() else {
+                return;
+            };
+            button.set_sensitive(false);
+            let state = state.clone();
+            let repository = repository.clone();
+            exec::dispatch(
+                rebuild_template(repository.clone(), sandbox),
+                move |result| match result {
+                    Ok(template) => {
+                        view.show(&template);
+                        apply_sandbox_enabled(&state, &repository, sandbox, Some(template));
+                    }
+                    Err(err) => {
+                        view.detail
+                            .set_text(&format!("Failed to start a build: {err}"));
+                        view.build_button.set_sensitive(true);
+                    }
+                },
+            );
+        });
+    }
+
+    // Only a weak reference, so the refresh ends once the page is gone.
+    let weak = Rc::downgrade(&view);
+    let state = state.clone();
+    let repository = repository.to_string();
+    refresh_template_view(&weak, &state, &repository, sandbox);
+    glib::timeout_add_local(TEMPLATE_POLL_INTERVAL, move || {
+        if weak.upgrade().is_none() {
+            return glib::ControlFlow::Break;
+        }
+        refresh_template_view(&weak, &state, &repository, sandbox);
+        glib::ControlFlow::Continue
+    });
+
+    (container, view)
+}
+
+fn refresh_template_view(
+    view: &Weak<TemplateView>,
+    state: &Rc<AppState>,
+    repository: &str,
+    sandbox: SandboxKind,
+) {
+    let Some(current) = view.upgrade() else {
+        return;
+    };
+    let building = current
+        .shown
+        .borrow()
+        .as_ref()
+        .is_some_and(TemplateStatus::is_building);
+    if !current.enabled.get() || !(building || current.refresh_pending.get()) {
+        return;
+    }
+    if current.polling.replace(true) {
+        return;
+    }
+    current.refresh_pending.set(false);
+
+    let view = view.clone();
+    let state = state.clone();
+    let repository = repository.to_string();
+    exec::dispatch(load_template(repository.clone(), sandbox), move |result| {
+        let Some(view) = view.upgrade() else {
+            return;
+        };
+        view.polling.set(false);
+        let Ok((template, log)) = result else {
+            return;
+        };
+        let changed = view.shown.borrow().as_ref() != Some(&template);
+        view.show(&template);
+        view.show_log(&log);
+        if changed && view.enabled.get() {
+            apply_sandbox_enabled(&state, &repository, sandbox, Some(template));
+        }
+    });
 }
 
 fn integration_row(
@@ -420,15 +772,17 @@ fn buffer_text(buffer: &TextBuffer) -> String {
 fn build_setup_script_section(
     repository: &str,
     notice: &Revealer,
+    on_saved: Rc<dyn Fn()>,
 ) -> (GtkBox, GtkBox, ShowLoaded<String>) {
     let section = GtkBox::new(Orientation::Vertical, 0);
 
     section.append(&section_heading("Setup script"));
 
     let description = Label::new(Some(
-        "Runs with bash in every new remote workspace, from the repository \
-         checkout, before the workspace's shell starts. Use it to install \
-         toolchains and system packages.",
+        "Runs with bash in the repository checkout when the template is built. \
+         New remote workspaces are copies of the template, so they start with \
+         whatever the script installs. Saving a changed script rebuilds the \
+         template.",
     ));
     description.set_xalign(0.0);
     description.set_wrap(true);
@@ -517,6 +871,7 @@ fn build_setup_script_section(
         let save_button = save_button.clone();
         let status = status.clone();
         let mark_saved = mark_saved.clone();
+        let on_saved = on_saved.clone();
         Rc::new(move || {
             if !save_button.is_sensitive() {
                 return;
@@ -528,6 +883,7 @@ fn build_setup_script_section(
             let save_button = save_button.clone();
             let status = status.clone();
             let mark_saved = mark_saved.clone();
+            let on_saved = on_saved.clone();
             exec::dispatch(
                 save_setup_script(repository.clone(), script.clone()),
                 move |result| match result {
@@ -535,6 +891,7 @@ fn build_setup_script_section(
                         *saved_script.borrow_mut() = script;
                         // Edits made while saving stay unsaved.
                         mark_saved();
+                        on_saved();
                     }
                     Err(err) => {
                         status.set_text(&format!("Failed to save: {err}"));

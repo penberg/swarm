@@ -6,6 +6,7 @@ pub mod prune;
 pub mod repos;
 pub mod sandbox;
 pub mod sessions;
+pub mod templates;
 pub mod toolchains;
 pub mod workspaces;
 
@@ -71,6 +72,9 @@ pub enum SplayError {
         "{sandbox} is not enabled for repository `{repository}`; enable it with `splayctl repo enable {repository} {sandbox}`"
     )]
     SandboxNotEnabled { repository: String, sandbox: String },
+
+    #[error("{0}")]
+    TemplateNotReady(String),
 
     #[error("sandbox command failed: {0}")]
     Sandbox(String),
