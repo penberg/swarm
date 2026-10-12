@@ -6,7 +6,7 @@ use splay::{
     workspaces::{Workspace, WorkspaceStore},
 };
 use std::{
-    fs, io,
+    env, fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -36,6 +36,15 @@ pub struct WorkspaceEntry {
     pub recently_used: bool,
     /// Set while the workspace is being created; such entries exist only in the UI.
     pub provisioning: Option<Provisioning>,
+}
+
+/// Read-only facts about a repository for its settings page.
+#[derive(Debug, Clone)]
+pub struct RepositoryDetails {
+    pub remote_url: String,
+    pub default_branch: Option<String>,
+    pub mirror_path: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +192,28 @@ pub async fn create_workspace(
         .collect::<Vec<_>>();
 
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
+}
+
+pub async fn load_repository_details(repository: String) -> Result<RepositoryDetails, SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    let repo = repo_store
+        .resolve_repository(&repository)
+        .await?
+        .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
+    let mirror_path = repo_store.bare_repo_path(&repo).display().to_string();
+    let mirror_path = match env::var("HOME") {
+        Ok(home) if !home.is_empty() && mirror_path.starts_with(&home) => {
+            format!("~{}", &mirror_path[home.len()..])
+        }
+        _ => mirror_path,
+    };
+
+    Ok(RepositoryDetails {
+        remote_url: repo.remote_url(),
+        default_branch: repo_store.default_branch(&repo),
+        mirror_path,
+        alias: repo.alias,
+    })
 }
 
 pub async fn load_setup_script(repository: String) -> Result<String, SplayError> {

@@ -290,6 +290,40 @@ window {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.settings-detail-row {
+  min-height: 24px;
+  padding: 10px 10px 10px 16px;
+}
+
+.settings-detail-key {
+  color: #7a8698;
+  font-size: 12px;
+}
+
+.settings-detail-value {
+  color: #dfe6ef;
+  font-size: 12px;
+}
+
+.settings-detail-literal {
+  font-family: monospace;
+}
+
+.settings-copy {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: #6f7887;
+}
+
+.settings-copy:hover {
+  background: rgba(126, 203, 255, 0.08);
+  color: #e7f3ff;
+}
+
 .settings-tile {
   min-width: 36px;
   min-height: 36px;

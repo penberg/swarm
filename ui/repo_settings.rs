@@ -1,14 +1,17 @@
 use gtk::{
     Align, Box as GtkBox, Button, EventControllerKey, Image, Label, Orientation, PolicyType,
     Revealer, RevealerTransitionType, ScrolledWindow, Switch, TextBuffer, TextView, Widget,
-    WrapMode, gdk, glib, prelude::*,
+    WrapMode, gdk, glib, pango::EllipsizeMode, prelude::*,
 };
 use splay::sandbox::SandboxKind;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use crate::{
     app::{AppState, apply_sandbox_enabled},
-    data::{WorkspaceGroup, load_setup_script, save_setup_script, set_sandbox_enabled},
+    data::{
+        RepositoryDetails, WorkspaceGroup, load_repository_details, load_setup_script,
+        save_setup_script, set_sandbox_enabled,
+    },
     exec,
 };
 
@@ -23,7 +26,7 @@ const REMOTE_SANDBOXES: [(SandboxKind, &str, &str); 1] = [(
 const GITHUB_MARK_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16"><path fill="#dfe6ef" d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>"##;
 
 /// Builds the settings page of a repository.
-pub fn build_repository_settings(state: &Rc<AppState>, group: &WorkspaceGroup) -> GtkBox {
+pub fn build_repository_settings(state: &Rc<AppState>, group: &WorkspaceGroup) -> ScrolledWindow {
     let page = GtkBox::new(Orientation::Vertical, 0);
     page.set_hexpand(true);
     page.set_vexpand(true);
@@ -48,11 +51,149 @@ pub fn build_repository_settings(state: &Rc<AppState>, group: &WorkspaceGroup) -
     setup_revealer.set_child(Some(&setup));
     setup_revealer.set_reveal_child(!group.remote_sandboxes.is_empty());
 
+    page.append(&section_heading("Git repository"));
+    page.append(&build_repository_card(group));
     page.append(&section_heading("Integrations"));
     page.append(&build_integrations_card(state, group, &setup_revealer));
     page.append(&setup_revealer);
 
-    page
+    // Scroll when the window is short; otherwise the editor takes the spare height.
+    let scroller = ScrolledWindow::new();
+    scroller.set_policy(PolicyType::Never, PolicyType::Automatic);
+    scroller.set_hexpand(true);
+    scroller.set_vexpand(true);
+    scroller.set_child(Some(&page));
+    scroller
+}
+
+/// Builds the read-only card describing where the repository comes from.
+fn build_repository_card(group: &WorkspaceGroup) -> GtkBox {
+    let card = GtkBox::new(Orientation::Vertical, 0);
+    card.add_css_class("settings-card");
+    card.append(&detail_row(
+        &DetailRow::text("Remote", "Loading ..."),
+        false,
+    ));
+
+    let last_synced = group
+        .repo_status
+        .clone()
+        .unwrap_or_else(|| "Never".to_string());
+    let container = card.clone();
+    exec::dispatch(
+        load_repository_details(group.repo_canonical.clone()),
+        move |result| {
+            while let Some(child) = container.first_child() {
+                container.remove(&child);
+            }
+            match result {
+                Ok(details) => {
+                    for (index, row) in repository_details_rows(details, last_synced)
+                        .iter()
+                        .enumerate()
+                    {
+                        container.append(&detail_row(row, index > 0));
+                    }
+                }
+                Err(err) => {
+                    container.append(&detail_row(
+                        &DetailRow::text("Error", &err.to_string()),
+                        false,
+                    ));
+                }
+            }
+        },
+    );
+
+    card
+}
+
+struct DetailRow {
+    key: &'static str,
+    value: String,
+    /// Shown in monospace, as it is something to paste rather than read.
+    literal: bool,
+    copyable: bool,
+}
+
+impl DetailRow {
+    fn text(key: &'static str, value: &str) -> Self {
+        Self {
+            key,
+            value: value.to_string(),
+            literal: false,
+            copyable: false,
+        }
+    }
+
+    fn literal(key: &'static str, value: String, copyable: bool) -> Self {
+        Self {
+            key,
+            value,
+            literal: true,
+            copyable,
+        }
+    }
+}
+
+fn repository_details_rows(details: RepositoryDetails, last_synced: String) -> Vec<DetailRow> {
+    let mut rows = vec![
+        DetailRow::literal("Remote", details.remote_url, true),
+        match details.default_branch {
+            Some(branch) => DetailRow::literal("Default branch", branch, false),
+            None => DetailRow::text("Default branch", "Not synced yet"),
+        },
+        DetailRow::text("Last synced", &last_synced),
+        DetailRow::literal("Local mirror", details.mirror_path, true),
+    ];
+    if let Some(alias) = details.alias {
+        rows.push(DetailRow::literal("Alias", alias, false));
+    }
+    rows
+}
+
+fn detail_row(detail: &DetailRow, divided: bool) -> GtkBox {
+    let row = GtkBox::new(Orientation::Horizontal, 12);
+    row.add_css_class("settings-detail-row");
+    if divided {
+        row.add_css_class("settings-row-divided");
+    }
+
+    let key_label = Label::new(Some(detail.key));
+    key_label.set_xalign(0.0);
+    key_label.set_size_request(140, -1);
+    key_label.add_css_class("settings-detail-key");
+    row.append(&key_label);
+
+    let value_label = Label::new(Some(&detail.value));
+    value_label.set_xalign(0.0);
+    value_label.set_hexpand(true);
+    value_label.set_selectable(true);
+    value_label.set_ellipsize(EllipsizeMode::Middle);
+    value_label.add_css_class("settings-detail-value");
+    if detail.literal {
+        value_label.add_css_class("settings-detail-literal");
+    }
+    row.append(&value_label);
+
+    if detail.copyable {
+        let copy_button = Button::from_icon_name("edit-copy-symbolic");
+        copy_button.set_valign(Align::Center);
+        copy_button.set_tooltip_text(Some("Copy"));
+        copy_button.add_css_class("settings-copy");
+        let value = detail.value.clone();
+        copy_button.connect_clicked(move |button| {
+            button.clipboard().set_text(&value);
+            button.set_icon_name("object-select-symbolic");
+            let button = button.clone();
+            glib::timeout_add_local_once(Duration::from_millis(1200), move || {
+                button.set_icon_name("edit-copy-symbolic");
+            });
+        });
+        row.append(&copy_button);
+    }
+
+    row
 }
 
 fn build_integrations_card(

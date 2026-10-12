@@ -489,6 +489,21 @@ impl RepositoryStore {
         self.paths.repo_dir(repo).join("source.git")
     }
 
+    /// Returns the default branch recorded by the last sync, without fetching.
+    pub fn default_branch(&self, repo: &Repository) -> Option<String> {
+        let head = run_git(
+            Some(&self.paths.repo_dir(repo)),
+            [
+                format!("--git-dir={}", self.bare_repo_path(repo).display()),
+                "symbolic-ref".to_string(),
+                "--short".to_string(),
+                "refs/remotes/origin/HEAD".to_string(),
+            ],
+        )
+        .ok()?;
+        Some(head.strip_prefix("origin/").unwrap_or(&head).to_string())
+    }
+
     pub fn sessions_dir(&self, repo: &Repository) -> PathBuf {
         self.paths.repo_dir(repo).join("sessions")
     }
