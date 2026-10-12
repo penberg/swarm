@@ -1,8 +1,8 @@
 use gtk::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
-    EventControllerKey, EventControllerMotion, GestureClick, Grid, Image, Label, ListBox,
-    ListBoxRow, Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION,
-    ScrolledWindow, SelectionMode, Spinner, Widget, gdk,
+    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
+    Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow,
+    SelectionMode, Spinner, Widget, gdk,
     gio::{self, FileMonitor, FileMonitorFlags},
     glib,
     prelude::*,
@@ -229,9 +229,18 @@ window {
   opacity: 0;
 }
 
-.repo-row-selected .repo-header,
-.repo-title:hover .repo-header {
+.repo-row-selected .repo-header {
   color: #b6dcff;
+}
+
+/* Shown on hover, like the sync status, and while the settings page is open. */
+.repo-settings-button {
+  opacity: 0;
+}
+
+.repo-row-hover .repo-settings-button,
+.repo-row-selected .repo-settings-button {
+  opacity: 1;
 }
 
 .repo-settings {
@@ -1727,30 +1736,18 @@ fn build_repo_row(
     row.set_spacing(6);
     row.add_css_class("repo-row");
 
-    if state
+    let settings_open = state
         .settings_repository
         .borrow()
         .as_deref()
-        .is_some_and(|repo| repo == repo_canonical)
-    {
+        .is_some_and(|repo| repo == repo_canonical);
+    if settings_open {
         row.add_css_class("repo-row-selected");
     }
 
     let copy = GtkBox::new(Orientation::Vertical, 0);
     copy.set_hexpand(true);
     copy.set_valign(Align::Center);
-    copy.set_tooltip_text(Some("Repository settings"));
-    copy.add_css_class("repo-title");
-
-    let click = GestureClick::new();
-    {
-        let state = state.clone();
-        let repo_canonical = repo_canonical.to_string();
-        click.connect_released(move |_, _, _, _| {
-            open_repository_settings(&state, &repo_canonical);
-        });
-    }
-    copy.add_controller(click);
 
     let label = Label::new(Some(&repo_label.to_uppercase()));
     label.set_xalign(0.0);
@@ -1807,6 +1804,27 @@ fn build_repo_row(
         });
     }
 
+    let settings_button = Button::new();
+    settings_button.set_valign(Align::Center);
+    settings_button.add_css_class("repo-sync");
+    settings_button.add_css_class("repo-settings-button");
+    settings_button.set_tooltip_text(Some(if settings_open {
+        "Close repository settings"
+    } else {
+        "Repository settings"
+    }));
+    let settings_icon = Image::from_icon_name("emblem-system-symbolic");
+    settings_icon.set_pixel_size(14);
+    settings_button.set_child(Some(&settings_icon));
+
+    {
+        let state = state.clone();
+        let repo_canonical = repo_canonical.to_string();
+        settings_button.connect_clicked(move |_| {
+            toggle_repository_settings(&state, &repo_canonical);
+        });
+    }
+
     let is_creating = state.creating_workspaces.borrow().contains(repo_canonical);
     let local_button =
         build_new_workspace_button(state, repo_canonical, SandboxKind::Local, is_creating);
@@ -1852,6 +1870,7 @@ fn build_repo_row(
     }
     row.add_controller(hover);
 
+    row.append(&settings_button);
     row.append(&sync_button);
     row.append(&local_button);
     row.append(&exedev_button);
@@ -1859,8 +1878,14 @@ fn build_repo_row(
     row
 }
 
-fn open_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
-    *state.settings_repository.borrow_mut() = Some(repo_canonical.to_string());
+fn toggle_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
+    let mut settings_repository = state.settings_repository.borrow_mut();
+    if settings_repository.as_deref() == Some(repo_canonical) {
+        *settings_repository = None;
+    } else {
+        *settings_repository = Some(repo_canonical.to_string());
+    }
+    drop(settings_repository);
     *state.selected_workspace.borrow_mut() = None;
     *state.editing_workspace.borrow_mut() = None;
     *state.selected_session.borrow_mut() = None;

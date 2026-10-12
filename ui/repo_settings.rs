@@ -27,7 +27,7 @@ pub fn build_repository_settings(group: &WorkspaceGroup) -> GtkBox {
     subtitle.add_css_class("repo-settings-subtitle");
     page.append(&subtitle);
 
-    let heading = Label::new(Some("exe.dev setup script"));
+    let heading = Label::new(Some("Sandbox setup script"));
     heading.set_xalign(0.0);
     heading.add_css_class("repo-settings-heading");
     page.append(&heading);
