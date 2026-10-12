@@ -7,7 +7,10 @@ use std::{
     io::{self, Read, Write},
     os::{
         fd::{AsRawFd, RawFd},
-        unix::net::{UnixListener, UnixStream},
+        unix::{
+            net::{UnixListener, UnixStream},
+            process::CommandExt,
+        },
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -287,6 +290,17 @@ impl SessionStore {
             .stdin(Stdio::null())
             .stdout(Stdio::from(supervisor_log))
             .stderr(Stdio::from(supervisor_err));
+        // Detach the supervisor from the caller's terminal and process group,
+        // so that Ctrl+C or closing the terminal that started Splay does not
+        // take the session down with it.
+        unsafe {
+            child.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
 
         child.spawn()?;
         Ok(())
