@@ -717,8 +717,7 @@ fn render_ui(
 ) {
     let selected_workspace = preferred_workspace
         .or_else(|| state.selected_workspace.borrow().clone())
-        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref))
-        .or_else(|| first_workspace(groups));
+        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref));
 
     let detail_widgets = state
         .detail_widgets
@@ -788,8 +787,7 @@ fn render_sidebar_only(state: &Rc<AppState>) {
         .selected_workspace
         .borrow()
         .clone()
-        .and_then(|workspace_ref| find_workspace_by_ref(&groups, &workspace_ref))
-        .or_else(|| first_workspace(&groups));
+        .and_then(|workspace_ref| find_workspace_by_ref(&groups, &workspace_ref));
     let detail_widgets = state
         .detail_widgets
         .borrow()
@@ -2196,14 +2194,6 @@ fn sidebar_append_static_row<W: IsA<Widget>>(list: &ListBox, widget: &W) {
     list.append(&row);
 }
 
-fn first_workspace(groups: &[WorkspaceGroup]) -> Option<WorkspaceEntry> {
-    let workspaces = || groups.iter().flat_map(|group| &group.workspaces);
-    workspaces()
-        .find(|workspace| workspace.recently_used)
-        .or_else(|| workspaces().next())
-        .cloned()
-}
-
 fn find_workspace_by_ref(groups: &[WorkspaceGroup], selected_ref: &str) -> Option<WorkspaceEntry> {
     groups.iter().find_map(|group| {
         group.workspaces.iter().find_map(|workspace| {
@@ -2350,10 +2340,7 @@ fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, b
                         .selected_workspace
                         .borrow()
                         .clone()
-                        .filter(|selected| selected != &removed_workspace_ref)
-                        .or_else(|| {
-                            first_workspace(&next_groups).map(|workspace| workspace_ref(&workspace))
-                        });
+                        .filter(|selected| selected != &removed_workspace_ref);
 
                     *state.workspace_groups.borrow_mut() = next_groups.clone();
                     *state.selected_workspace.borrow_mut() = next_workspace.clone();
