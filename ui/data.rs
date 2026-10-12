@@ -271,7 +271,7 @@ pub async fn rebuild_template(
 ) -> Result<TemplateStatus, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let repo = resolve_repository(&repo_store, &repository).await?;
-    templates::rebuild(&repo_store, &repo, sandbox)?;
+    templates::rebuild(&repo_store, &repo, sandbox).await?;
     Ok(templates::status(&repo_store, &repo, sandbox))
 }
 

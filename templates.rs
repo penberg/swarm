@@ -3,9 +3,10 @@
 //! A remote sandbox keeps one template per repository: a checkout with the
 //! repository's setup script already run. Templates are built by a detached
 //! `splayctl repo build-template` process, so that a build survives the
-//! process that started it. Its state lives in a JSON file next to the build
-//! log, rather than in the index database, because the builder updates it
-//! from another process for minutes at a time.
+//! process that started it. The builder never opens the index database,
+//! which a process can keep locked against all others for as long as it
+//! runs: it gets the setup script from a file, and the template's state lives
+//! in a JSON file next to the build log.
 
 use serde::{Deserialize, Serialize};
 use std::{
@@ -143,15 +144,20 @@ pub async fn set_setup_script(
 }
 
 /// Builds the template again, unless a build is already running.
-pub fn rebuild(
+pub async fn rebuild(
     repos: &RepositoryStore,
     repo: &Repository,
     sandbox_kind: SandboxKind,
 ) -> Result<(), SplayError> {
+    let dir = template_dir(repos, repo, sandbox_kind);
+    write_wanted_script(
+        &dir,
+        repos.setup_script(&repo.canonical()).await?.as_deref(),
+    )?;
     if status(repos, repo, sandbox_kind).is_building() {
         return Ok(());
     }
-    start_build(repos, repo, sandbox_kind)
+    start_build(&dir, repo, sandbox_kind)
 }
 
 /// Starts a build unless the template is up to date with the setup script or
@@ -162,12 +168,15 @@ async fn ensure_built(
     repo: &Repository,
     sandbox_kind: SandboxKind,
 ) -> Result<(), SplayError> {
+    let dir = template_dir(repos, repo, sandbox_kind);
+    let script = repos.setup_script(&repo.canonical()).await?;
+    write_wanted_script(&dir, script.as_deref())?;
+
     let current = status(repos, repo, sandbox_kind);
     if current.is_building() {
         return Ok(());
     }
-
-    let script_hash = script_hash(repos.setup_script(&repo.canonical()).await?.as_deref());
+    let script_hash = script_hash(script.as_deref());
     if current
         .ready
         .is_some_and(|ready| ready.script_hash == script_hash)
@@ -175,22 +184,37 @@ async fn ensure_built(
         return Ok(());
     }
 
-    start_build(repos, repo, sandbox_kind)
+    start_build(&dir, repo, sandbox_kind)
 }
 
-fn start_build(
-    repos: &RepositoryStore,
-    repo: &Repository,
-    sandbox_kind: SandboxKind,
-) -> Result<(), SplayError> {
-    let dir = template_dir(repos, repo, sandbox_kind);
-    fs::create_dir_all(&dir)?;
+/// Records the setup script the template should be built with. The builder
+/// reads it from here rather than from the index database: a process that
+/// opened the database can keep it locked against every other process for as
+/// long as the build runs.
+fn write_wanted_script(dir: &Path, script: Option<&str>) -> Result<(), SplayError> {
+    fs::create_dir_all(dir)?;
+    let temporary = dir.join(format!("setup.sh.{}", process::id()));
+    fs::write(&temporary, script.unwrap_or_default())?;
+    fs::rename(&temporary, dir.join("setup.sh"))?;
+    Ok(())
+}
+
+fn read_wanted_script(dir: &Path) -> Result<Option<String>, SplayError> {
+    let script = fs::read_to_string(dir.join("setup.sh"))?;
+    Ok(Some(script).filter(|script| !script.trim().is_empty()))
+}
+
+fn start_build(dir: &Path, repo: &Repository, sandbox_kind: SandboxKind) -> Result<(), SplayError> {
+    fs::create_dir_all(dir)?;
     let log = File::create(dir.join("build.log"))?;
 
+    // Pass everything the builder needs, so that it never opens the index
+    // database; see `write_wanted_script`.
     let mut builder = Command::new(supervisor_executable()?);
     builder
         .args(["repo", "build-template"])
-        .arg(repo.canonical())
+        .arg(dir)
+        .arg(repo.remote_url())
         .arg(sandbox_kind.as_str())
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
@@ -206,7 +230,7 @@ fn start_build(
     }
     let child = builder.spawn()?;
 
-    update_state(&dir, |state| {
+    update_state(dir, |state| {
         state.build = Some(TemplateBuild {
             pid: child.id(),
             name: None,
@@ -217,17 +241,14 @@ fn start_build(
     Ok(())
 }
 
-/// Builds the template of `repository` in `sandbox_kind`. This is the body of
-/// the detached builder process; its output is the build log.
-pub async fn run_build(repository: &str, sandbox_kind: SandboxKind) -> Result<(), SplayError> {
-    // The index database is locked for as long as a process has it open, so
-    // open it only briefly rather than for the whole build.
-    let (repo, dir) = {
-        let repos = RepositoryStore::open().await?;
-        let repo = resolve(&repos, repository).await?;
-        let dir = template_dir(&repos, &repo, sandbox_kind);
-        (repo, dir)
-    };
+/// Builds the template in `dir` for the repository at `remote_url`. This is
+/// the body of the detached builder process; its output is the build log.
+pub fn run_build(
+    dir: &Path,
+    remote_url: &str,
+    sandbox_kind: SandboxKind,
+) -> Result<(), SplayError> {
+    let repo = Repository::parse(remote_url, None)?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -236,10 +257,10 @@ pub async fn run_build(repository: &str, sandbox_kind: SandboxKind) -> Result<()
     let started_at = unix_timestamp();
 
     loop {
-        let script = read_setup_script(&repo).await?;
+        let script = read_wanted_script(dir)?;
         let script_hash = script_hash(script.as_deref());
         let name = provider.new_template_name(&repo);
-        update_state(&dir, |state| {
+        update_state(dir, |state| {
             state.build = Some(TemplateBuild {
                 pid: process::id(),
                 name: Some(name.clone()),
@@ -259,7 +280,7 @@ pub async fn run_build(repository: &str, sandbox_kind: SandboxKind) -> Result<()
             if let Err(cleanup) = provider.destroy_template(&name) {
                 writeln!(&log, "==> Failed to delete {name}: {cleanup}")?;
             }
-            update_state(&dir, |state| {
+            update_state(dir, |state| {
                 state.build = Some(TemplateBuild {
                     pid: process::id(),
                     name: None,
@@ -271,7 +292,7 @@ pub async fn run_build(repository: &str, sandbox_kind: SandboxKind) -> Result<()
         }
 
         let mut previous = None;
-        update_state(&dir, |state| {
+        update_state(dir, |state| {
             previous = state.ready.replace(ReadyTemplate {
                 name: name.clone(),
                 script_hash: script_hash.clone(),
@@ -290,14 +311,14 @@ pub async fn run_build(repository: &str, sandbox_kind: SandboxKind) -> Result<()
         }
 
         // Build again if the script changed while this build ran.
-        let script = read_setup_script(&repo).await?;
+        let script = read_wanted_script(dir)?;
         if script_hash == self::script_hash(script.as_deref()) {
             break;
         }
         writeln!(&log, "==> The setup script changed; building again")?;
     }
 
-    update_state(&dir, |state| state.build = None)?;
+    update_state(dir, |state| state.build = None)?;
     Ok(())
 }
 
@@ -328,13 +349,6 @@ fn remove(
         fs::remove_dir_all(&dir)?;
     }
     result
-}
-
-async fn read_setup_script(repo: &Repository) -> Result<Option<String>, SplayError> {
-    RepositoryStore::open()
-        .await?
-        .setup_script(&repo.canonical())
-        .await
 }
 
 async fn resolve(repos: &RepositoryStore, repository: &str) -> Result<Repository, SplayError> {

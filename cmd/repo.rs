@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::{
     SplayError,
     opts::{RepoCommand, RepoSubcommand},
@@ -7,6 +9,21 @@ use crate::{
 };
 
 pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
+    // The template builder runs for minutes and must not hold the index
+    // database open meanwhile, as that locks out every other process.
+    if let RepoSubcommand::BuildTemplate {
+        template_dir,
+        remote_url,
+        sandbox,
+    } = &cmd.command
+    {
+        return templates::run_build(
+            Path::new(template_dir),
+            remote_url,
+            SandboxKind::parse(sandbox)?,
+        );
+    }
+
     let store = RepositoryStore::open().await?;
 
     match cmd.command {
@@ -76,7 +93,7 @@ pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
                 .await?
                 .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
             if rebuild {
-                templates::rebuild(&store, &repo, sandbox)?;
+                templates::rebuild(&store, &repo, sandbox).await?;
             }
 
             let status = templates::status(&store, &repo, sandbox);
@@ -91,12 +108,7 @@ pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
                 println!("Last build failed: {error}");
             }
         }
-        RepoSubcommand::BuildTemplate {
-            repository,
-            sandbox,
-        } => {
-            templates::run_build(&repository, SandboxKind::parse(&sandbox)?).await?;
-        }
+        RepoSubcommand::BuildTemplate { .. } => unreachable!("handled above"),
     }
 
     Ok(())

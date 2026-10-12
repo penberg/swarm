@@ -63,7 +63,8 @@ pub enum RepoSubcommand {
     },
     #[command(hide = true)]
     BuildTemplate {
-        repository: String,
+        template_dir: String,
+        remote_url: String,
         sandbox: String,
     },
 }
