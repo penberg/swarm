@@ -33,9 +33,9 @@ pub fn build_repository_settings(group: &WorkspaceGroup) -> GtkBox {
     page.append(&heading);
 
     let description = Label::new(Some(
-        "Runs with bash in a \"setup\" session of every new exe.dev workspace, \
-         from the repository checkout, after the repository is cloned. \
-         Use it to install toolchains and system packages.",
+        "Runs with bash in every new remote workspace, from the repository \
+         checkout, before the workspace's shell starts. Use it to install \
+         toolchains and system packages.",
     ));
     description.set_xalign(0.0);
     description.set_wrap(true);

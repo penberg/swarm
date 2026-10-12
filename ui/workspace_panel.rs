@@ -371,7 +371,7 @@ fn build_provisioning_placeholder(sandbox: SandboxKind, provisioning: &Provision
 
     let location = match sandbox {
         SandboxKind::Local => "local",
-        SandboxKind::ExeDev => "exe.dev",
+        SandboxKind::ExeDev => "remote",
     };
     let (title, subtitle) = match &provisioning.error {
         Some(error) => {

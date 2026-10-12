@@ -1904,7 +1904,7 @@ fn build_new_workspace_button(
     button.set_sensitive(!is_creating);
     button.set_tooltip_text(Some(match sandbox {
         SandboxKind::Local => "New local workspace",
-        SandboxKind::ExeDev => "New exe.dev workspace",
+        SandboxKind::ExeDev => "New remote workspace",
     }));
     let icon = Image::from_icon_name(sandbox_icon_name(sandbox));
     icon.set_pixel_size(14);
@@ -2094,7 +2094,7 @@ fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceE
     indicator.append(&icon);
     set_workspace_status_indicator(&indicator, &workspace_pr_snapshot(state, workspace));
     if !is_local(workspace) {
-        indicator.set_tooltip_text(Some("Runs on exe.dev"));
+        indicator.set_tooltip_text(Some("Remote workspace"));
     }
     state
         .pr_indicators
