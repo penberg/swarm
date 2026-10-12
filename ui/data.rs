@@ -1,11 +1,12 @@
 use splay::{
     SplayError,
     repos::{Repository, RepositoryStore},
+    sandbox::SandboxKind,
     sessions::{SessionStore, default_session_command},
     workspaces::{Workspace, WorkspaceStore},
 };
 use std::{
-    fs, io,
+    env, fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -20,6 +21,8 @@ pub struct WorkspaceGroup {
     pub recently_used: bool,
     pub workspace_count: usize,
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Remote sandboxes enabled for the repository.
+    pub remote_sandboxes: Vec<SandboxKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,8 +31,26 @@ pub struct WorkspaceEntry {
     pub name: String,
     pub branch: String,
     pub path: String,
+    pub sandbox: SandboxKind,
     pub sessions: Vec<SessionEntry>,
     pub recently_used: bool,
+    /// Set while the workspace is being created; such entries exist only in the UI.
+    pub provisioning: Option<Provisioning>,
+}
+
+/// Read-only facts about a repository for its settings page.
+#[derive(Debug, Clone)]
+pub struct RepositoryDetails {
+    pub remote_url: String,
+    pub default_branch: Option<String>,
+    pub mirror_path: String,
+    pub alias: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Provisioning {
+    pub stage: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +79,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
         let repo_canonical = repo.canonical();
         let repo_status = repo_sync_status(&repo_store, &repo);
         let workspace_last_used = repo_store.workspace_last_used(&repo).await?;
+        let remote_sandboxes = repo_store.enabled_sandboxes(&repo).await?;
         let workspaces = workspace_store.list(&repo_canonical).await?;
         let workspaces = workspaces.into_iter().map(|workspace| async {
             let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
@@ -114,6 +136,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
             recently_used,
             workspace_count,
             workspaces: workspace_entries,
+            remote_sandboxes,
         });
     }
 
@@ -135,6 +158,8 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
 pub async fn create_workspace(
     repository: String,
     name: Option<String>,
+    sandbox: SandboxKind,
+    progress: impl Fn(&str) + Send + Sync + 'static,
 ) -> Result<WorkspaceEntry, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
@@ -144,13 +169,13 @@ pub async fn create_workspace(
         .resolve_repository(&repository)
         .await?
         .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
-    let workspace = workspace_store.create(&repository, name.as_deref()).await?;
+    let workspace = workspace_store
+        .create(&repository, name.as_deref(), sandbox, &progress)
+        .await?;
+    progress("Starting session");
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-    if let Err(err) = session_store
-        .create(&workspace_ref, &default_session_command())
-        .await
-    {
-        eprintln!("failed to create default session for {workspace_ref}: {err}");
+    if let Err(err) = session_store.create_initial(&workspace).await {
+        eprintln!("failed to create initial session for {workspace_ref}: {err}");
     }
     let sessions = session_store
         .list(Some(&workspace_ref))
@@ -167,6 +192,59 @@ pub async fn create_workspace(
         .collect::<Vec<_>>();
 
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
+}
+
+/// Everything the repository settings page shows.
+pub struct RepositorySettings {
+    pub details: RepositoryDetails,
+    pub setup_script: String,
+}
+
+pub async fn load_repository_settings(
+    repository: String,
+) -> Result<RepositorySettings, SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    let repo = repo_store
+        .resolve_repository(&repository)
+        .await?
+        .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
+    let mirror_path = repo_store.bare_repo_path(&repo).display().to_string();
+    let mirror_path = match env::var("HOME") {
+        Ok(home) if !home.is_empty() && mirror_path.starts_with(&home) => {
+            format!("~{}", &mirror_path[home.len()..])
+        }
+        _ => mirror_path,
+    };
+    let setup_script = repo_store
+        .setup_script(&repository)
+        .await?
+        .unwrap_or_default();
+
+    Ok(RepositorySettings {
+        details: RepositoryDetails {
+            remote_url: repo.remote_url(),
+            default_branch: repo_store.default_branch(&repo),
+            mirror_path,
+            alias: repo.alias,
+        },
+        setup_script,
+    })
+}
+
+pub async fn save_setup_script(repository: String, script: String) -> Result<(), SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.set_setup_script(&repository, &script).await
+}
+
+pub async fn set_sandbox_enabled(
+    repository: String,
+    sandbox: SandboxKind,
+    enabled: bool,
+) -> Result<(), SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store
+        .set_sandbox_enabled(&repository, sandbox, enabled)
+        .await
 }
 
 pub async fn add_repository(
@@ -421,7 +499,9 @@ fn map_workspace(
         name: workspace.name,
         branch: workspace.branch,
         path: workspace.path.display().to_string(),
+        sandbox: workspace.sandbox,
         sessions,
+        provisioning: None,
         // Workspaces that were just created, cloned or renamed are in use.
         recently_used: true,
     }

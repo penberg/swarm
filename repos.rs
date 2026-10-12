@@ -9,7 +9,7 @@ use std::{
 };
 use turso::{Builder, Connection};
 
-use crate::{SplayError, database_error, legacy};
+use crate::{SplayError, database_error, legacy, sandbox::SandboxKind};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Repository {
@@ -149,6 +149,14 @@ impl RepositoryStore {
             ON repos(alias)
             WHERE alias IS NOT NULL;
 
+            CREATE TABLE IF NOT EXISTS repo_integrations (
+                host TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                name TEXT NOT NULL,
+                integration TEXT NOT NULL,
+                PRIMARY KEY (host, owner, name, integration)
+            );
+
             CREATE TABLE IF NOT EXISTS workspace_usage (
                 repository TEXT NOT NULL,
                 workspace TEXT NOT NULL,
@@ -162,8 +170,132 @@ impl RepositoryStore {
         ensure_collapsed_column(&conn, &index_db_path).await?;
         ensure_remote_url_column(&conn, &index_db_path).await?;
         ensure_last_used_at_column(&conn, &index_db_path).await?;
+        ensure_setup_script_column(&conn, &index_db_path).await?;
 
         Ok(Self { paths, conn })
+    }
+
+    /// Returns the remote sandboxes enabled for `repo`.
+    pub async fn enabled_sandboxes(
+        &self,
+        repo: &Repository,
+    ) -> Result<Vec<SandboxKind>, SplayError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT integration
+                 FROM repo_integrations
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3
+                 ORDER BY integration",
+            )
+            .await?;
+        let mut rows = stmt
+            .query((repo.host.as_str(), repo.owner.as_str(), repo.name.as_str()))
+            .await?;
+        let mut sandboxes = Vec::new();
+
+        while let Some(row) = rows.next().await? {
+            // Skip integrations this version does not know about.
+            if let Ok(sandbox) = SandboxKind::parse(&row.get::<String>(0)?)
+                && sandbox != SandboxKind::Local
+            {
+                sandboxes.push(sandbox);
+            }
+        }
+
+        Ok(sandboxes)
+    }
+
+    /// Enables or disables a remote sandbox for `repository`.
+    pub async fn set_sandbox_enabled(
+        &self,
+        repository: &str,
+        sandbox: SandboxKind,
+        enabled: bool,
+    ) -> Result<(), SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        if sandbox == SandboxKind::Local {
+            return Err(SplayError::InvalidSandbox(sandbox.to_string()));
+        }
+
+        let key = (
+            repo.host.as_str(),
+            repo.owner.as_str(),
+            repo.name.as_str(),
+            sandbox.as_str(),
+        );
+        self.conn
+            .execute(
+                "DELETE FROM repo_integrations
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3 AND integration = ?4",
+                key,
+            )
+            .await?;
+        if enabled {
+            self.conn
+                .execute(
+                    "INSERT INTO repo_integrations (host, owner, name, integration)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    key,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Returns the script that sets up new remote workspaces of `repository`.
+    pub async fn setup_script(&self, repository: &str) -> Result<Option<String>, SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT setup_script
+                 FROM repos
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3",
+            )
+            .await?;
+        let mut rows = stmt
+            .query((repo.host.as_str(), repo.owner.as_str(), repo.name.as_str()))
+            .await?;
+
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+        Ok(row
+            .get::<Option<String>>(0)?
+            .filter(|script| !script.trim().is_empty()))
+    }
+
+    /// Sets the setup script of `repository`; an empty script removes it.
+    pub async fn set_setup_script(&self, repository: &str, script: &str) -> Result<(), SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        let script = Some(script).filter(|script| !script.trim().is_empty());
+
+        self.conn
+            .execute(
+                "UPDATE repos
+                 SET setup_script = ?4
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3",
+                (
+                    repo.host.as_str(),
+                    repo.owner.as_str(),
+                    repo.name.as_str(),
+                    script,
+                ),
+            )
+            .await?;
+
+        Ok(())
     }
 
     pub async fn add(
@@ -355,6 +487,21 @@ impl RepositoryStore {
 
     pub fn bare_repo_path(&self, repo: &Repository) -> PathBuf {
         self.paths.repo_dir(repo).join("source.git")
+    }
+
+    /// Returns the default branch recorded by the last sync, without fetching.
+    pub fn default_branch(&self, repo: &Repository) -> Option<String> {
+        let head = run_git(
+            Some(&self.paths.repo_dir(repo)),
+            [
+                format!("--git-dir={}", self.bare_repo_path(repo).display()),
+                "symbolic-ref".to_string(),
+                "--short".to_string(),
+                "refs/remotes/origin/HEAD".to_string(),
+            ],
+        )
+        .ok()?;
+        Some(head.strip_prefix("origin/").unwrap_or(&head).to_string())
     }
 
     pub fn sessions_dir(&self, repo: &Repository) -> PathBuf {
@@ -623,6 +770,18 @@ async fn ensure_last_used_at_column(conn: &Connection, path: &Path) -> Result<()
     conn.execute("ALTER TABLE repos ADD COLUMN last_used_at INTEGER", ())
         .await
         .map_err(|err| database_error(path, "add last_used_at column", err))?;
+
+    Ok(())
+}
+
+async fn ensure_setup_script_column(conn: &Connection, path: &Path) -> Result<(), SplayError> {
+    if has_column(conn, "repos", "setup_script").await? {
+        return Ok(());
+    }
+
+    conn.execute("ALTER TABLE repos ADD COLUMN setup_script TEXT", ())
+        .await
+        .map_err(|err| database_error(path, "add setup_script column", err))?;
 
     Ok(())
 }

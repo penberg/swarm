@@ -5,9 +5,11 @@ use splay::{
 };
 
 mod app;
+mod clamp;
 mod data;
 mod exec;
 mod ghostty;
+mod repo_settings;
 mod workspace_panel;
 
 fn main() {

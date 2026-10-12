@@ -2,6 +2,7 @@ use crate::{
     SplayError,
     opts::{RepoCommand, RepoSubcommand},
     repos::RepositoryStore,
+    sandbox::SandboxKind,
 };
 
 pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
@@ -36,6 +37,24 @@ pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
                     repo.canonical()
                 );
             }
+        }
+        RepoSubcommand::Enable {
+            repository,
+            integration,
+        } => {
+            store
+                .set_sandbox_enabled(&repository, SandboxKind::parse(&integration)?, true)
+                .await?;
+            println!("Enabled {integration} for {repository}");
+        }
+        RepoSubcommand::Disable {
+            repository,
+            integration,
+        } => {
+            store
+                .set_sandbox_enabled(&repository, SandboxKind::parse(&integration)?, false)
+                .await?;
+            println!("Disabled {integration} for {repository}");
         }
     }
 

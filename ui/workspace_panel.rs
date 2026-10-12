@@ -1,7 +1,11 @@
 use gtk::{
-    Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack, glib, prelude::*,
+    Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Spinner, Stack, glib,
+    prelude::*,
 };
-use splay::forges::github::{self, PullRequestStatus};
+use splay::{
+    forges::github::{self, PullRequestStatus},
+    sandbox::SandboxKind,
+};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -18,8 +22,12 @@ use crate::{
         render_selected_workspace_detail, request_workspace_pr_status, schedule_render_current_ui,
         workspace_pr_snapshot, workspace_ref,
     },
-    data::{SessionEntry, WorkspaceEntry, close_session, create_session, foreground_program},
+    data::{
+        Provisioning, SessionEntry, WorkspaceEntry, WorkspaceGroup, close_session, create_session,
+        foreground_program,
+    },
     exec, ghostty,
+    repo_settings::build_repository_settings,
 };
 
 #[derive(Clone)]
@@ -109,6 +117,11 @@ impl DetailWidgets {
         state: &Rc<AppState>,
         preferred_session: Option<&str>,
     ) {
+        if let Some(provisioning) = &workspace.provisioning {
+            self.render_provisioning(workspace, provisioning);
+            return;
+        }
+
         // Fast path: if the session set already matches what's rendered,
         // avoid clearing the stack. Removing and re-adding the terminal
         // DrawingArea drops keyboard focus on every periodic refresh (e.g.
@@ -203,6 +216,32 @@ impl DetailWidgets {
         }
         sync_session_tab_active_state(&self.session_tabs, Some(&selected_session));
         self.track_session_programs(&workspace.sessions);
+    }
+
+    pub fn render_repository_settings(&self, state: &Rc<AppState>, group: &WorkspaceGroup) {
+        // Keep an open settings page as is, so refreshes do not discard edits.
+        let page_name = format!("settings:{}", group.repo_canonical);
+        if self.session_stack.child_by_name(&page_name).is_some() {
+            return;
+        }
+
+        clear_box(&self.session_toolbar);
+        clear_stack(&self.session_stack);
+        self.track_session_programs(&[]);
+
+        let page = build_repository_settings(state, group);
+        self.session_stack
+            .add_titled(&page, Some(&page_name), "settings");
+    }
+
+    fn render_provisioning(&self, workspace: &WorkspaceEntry, provisioning: &Provisioning) {
+        clear_box(&self.session_toolbar);
+        clear_stack(&self.session_stack);
+        self.track_session_programs(&[]);
+
+        let placeholder = build_provisioning_placeholder(workspace.sandbox, provisioning);
+        self.session_stack
+            .add_titled(&placeholder, Some("provisioning"), "provisioning");
     }
 
     fn track_session_programs(&self, sessions: &[SessionEntry]) {
@@ -317,6 +356,57 @@ fn build_placeholder(title: &str, subtitle: &str) -> GtkBox {
     subtitle_label.add_css_class("terminal-placeholder-subtitle");
 
     container.append(&icon);
+    container.append(&title_label);
+    container.append(&subtitle_label);
+    container
+}
+
+fn build_provisioning_placeholder(sandbox: SandboxKind, provisioning: &Provisioning) -> GtkBox {
+    let container = GtkBox::new(Orientation::Vertical, 0);
+    container.set_hexpand(true);
+    container.set_vexpand(true);
+    container.set_halign(Align::Center);
+    container.set_valign(Align::Center);
+    container.add_css_class("terminal-placeholder");
+
+    let location = match sandbox {
+        SandboxKind::Local => "local",
+        SandboxKind::ExeDev => "remote",
+    };
+    let (title, subtitle) = match &provisioning.error {
+        Some(error) => {
+            let icon = Image::from_icon_name("dialog-error-symbolic");
+            icon.set_pixel_size(28);
+            icon.set_halign(Align::Center);
+            icon.add_css_class("workspace-provisioning-failed");
+            container.append(&icon);
+            (
+                format!("Failed to create {location} workspace"),
+                error.clone(),
+            )
+        }
+        None => {
+            let spinner = Spinner::new();
+            spinner.set_size_request(28, 28);
+            spinner.set_halign(Align::Center);
+            spinner.start();
+            container.append(&spinner);
+            (
+                format!("Creating {location} workspace"),
+                format!("{} ...", provisioning.stage),
+            )
+        }
+    };
+
+    let title_label = Label::new(Some(&title));
+    title_label.add_css_class("terminal-placeholder-title");
+
+    let subtitle_label = Label::new(Some(&subtitle));
+    subtitle_label.set_wrap(true);
+    subtitle_label.set_max_width_chars(80);
+    subtitle_label.set_selectable(provisioning.error.is_some());
+    subtitle_label.add_css_class("terminal-placeholder-subtitle");
+
     container.append(&title_label);
     container.append(&subtitle_label);
     container

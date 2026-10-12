@@ -10,6 +10,7 @@ use gtk::{
 use splay::{
     SplayError,
     forges::github::{self, PullRequestStatus, PullRequestStatusState},
+    sandbox::SandboxKind,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -18,12 +19,13 @@ use std::{
     rc::Rc,
     time::{Duration, Instant},
 };
+use tokio::sync::mpsc;
 
 use crate::{
     data::{
-        WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, create_workspace,
-        current_workspace_branch, load_workspace_groups, mark_workspace_used, read_workspace_head,
-        remove_workspace, rename_workspace, set_all_repositories_collapsed,
+        Provisioning, WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace,
+        create_workspace, current_workspace_branch, load_workspace_groups, mark_workspace_used,
+        read_workspace_head, remove_workspace, rename_workspace, set_all_repositories_collapsed,
         set_repository_collapsed, sync_repository, workspace_head_path,
     },
     exec,
@@ -31,6 +33,7 @@ use crate::{
 };
 
 const APP_ID: &str = "com.penberg.splay.ui";
+const SANDBOX_ICON_SIZE: i32 = 12;
 const MAX_PENDING_PR_LOOKUPS: usize = 2;
 const SELECTED_PR_STATUS_TTL: Duration = Duration::from_secs(5);
 const PENDING_PR_STATUS_TTL: Duration = Duration::from_secs(15);
@@ -226,6 +229,262 @@ window {
   opacity: 0;
 }
 
+.repo-row-selected .repo-header {
+  color: #b6dcff;
+}
+
+.repo-row-selected .repo-settings-button {
+  color: #b6dcff;
+}
+
+.repo-settings {
+  padding: 36px 40px 28px 40px;
+}
+
+.repo-settings-title {
+  color: #f3f5f7;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.repo-settings-subtitle {
+  color: #6f7887;
+  font-size: 12px;
+  margin-top: 4px;
+  margin-bottom: 22px;
+}
+
+.settings-tabs {
+  margin-bottom: 26px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.settings-tab {
+  min-height: 0;
+  margin: 0 22px -1px 0;
+  padding: 8px 2px 10px 2px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: #7a8698;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-tab:hover {
+  color: #dfe6ef;
+}
+
+.settings-tab:checked {
+  color: #f3f5f7;
+  border-bottom-color: #7ecbff;
+}
+
+.settings-card:disabled {
+  opacity: 0.45;
+}
+
+.settings-notice {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(216, 163, 65, 0.10);
+  color: #e6c27a;
+  font-size: 12px;
+}
+
+.settings-section-heading {
+  color: #566172;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  margin-bottom: 10px;
+}
+
+.settings-section-description {
+  color: #7a8698;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.settings-card {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  margin-bottom: 30px;
+}
+
+.settings-row {
+  padding: 14px 16px;
+}
+
+.settings-row-divided {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-detail-row {
+  min-height: 24px;
+  padding: 10px 10px 10px 16px;
+}
+
+.settings-detail-key {
+  color: #7a8698;
+  font-size: 12px;
+}
+
+.settings-detail-value {
+  color: #dfe6ef;
+  font-size: 12px;
+}
+
+.settings-detail-literal {
+  font-family: monospace;
+}
+
+.settings-copy {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+  color: #6f7887;
+}
+
+.settings-copy:hover {
+  background: rgba(126, 203, 255, 0.08);
+  color: #e7f3ff;
+}
+
+.settings-tile {
+  min-width: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #dfe6ef;
+}
+
+.settings-tile-remote {
+  color: #7ecbff;
+}
+
+.settings-row-title {
+  color: #eef4fb;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-row-description {
+  color: #7a8698;
+  font-size: 12px;
+}
+
+.settings-pill {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(87, 194, 108, 0.12);
+  color: #8fd19e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settings-card switch {
+  min-width: 40px;
+  min-height: 22px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+}
+
+.settings-card switch:checked {
+  background: #2f7fc1;
+}
+
+.settings-card switch image {
+  opacity: 0;
+}
+
+.settings-card switch slider {
+  min-width: 18px;
+  min-height: 18px;
+  margin: 2px;
+  border: none;
+  border-radius: 999px;
+  background: #eef4fb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+.settings-editor-header {
+  padding: 9px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-editor-language {
+  color: #6f7887;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.settings-editor-status,
+.settings-editor-hint {
+  color: #6f7887;
+  font-size: 11px;
+}
+
+.settings-editor,
+.settings-editor text {
+  background: transparent;
+  color: #eef4fb;
+}
+
+.settings-editor-footer {
+  padding: 9px 10px 9px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.settings-save {
+  min-height: 28px;
+  padding: 0 16px;
+  background: rgba(126, 203, 255, 0.10);
+  color: #b6dcff;
+  border: 1px solid rgba(143, 202, 255, 0.28);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-save:hover {
+  background: rgba(126, 203, 255, 0.18);
+  color: #eaf5ff;
+}
+
+.settings-discard {
+  min-height: 28px;
+  padding: 0 14px;
+  background: transparent;
+  color: #9aa6b8;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-discard:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #eef4fb;
+}
+
+.settings-discard:disabled,
+.settings-save:disabled {
+  background: transparent;
+  color: #566172;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
 .repo-row-hover .repo-status {
   opacity: 1;
 }
@@ -253,30 +512,35 @@ window {
 }
 
 .workspace-status-slot {
-  min-width: 8px;
+  min-width: 12px;
 }
 
 .workspace-pr-indicator {
-  min-width: 8px;
-  min-height: 8px;
-  border-radius: 999px;
-  background: #6f7887;
+  color: #6f7887;
 }
 
 .workspace-pr-success {
-  background: #57c26c;
+  color: #57c26c;
 }
 
 .workspace-pr-pending {
-  background: #d8a341;
+  color: #d8a341;
 }
 
-.workspace-pr-failure {
-  background: #e06767;
+/* Matches SANDBOX_ICON_SIZE; spinners default to the theme's 16px icon size. */
+.workspace-provisioning-spinner {
+  min-width: 12px;
+  min-height: 12px;
+  -gtk-icon-size: 12px;
+}
+
+.workspace-pr-failure,
+.workspace-provisioning-failed {
+  color: #e06767;
 }
 
 .workspace-pr-merged {
-  background: #a371f7;
+  color: #a371f7;
 }
 
 .workspace-action {
@@ -559,7 +823,10 @@ fn build_ui(app: &Application) {
         creating_session_workspaces: RefCell::new(HashSet::new()),
         closing_sessions: RefCell::new(HashSet::new()),
         creating_workspaces: RefCell::new(HashSet::new()),
+        provisioning_workspaces: RefCell::new(Vec::new()),
+        next_provisioning_id: Cell::new(1),
         removing_workspaces: RefCell::new(HashSet::new()),
+        settings_repository: RefCell::new(None),
     });
 
     let sidebar_widgets = build_sidebar_widgets(&state);
@@ -602,7 +869,12 @@ pub struct AppState {
     pub(crate) creating_session_workspaces: RefCell<HashSet<String>>,
     pub(crate) closing_sessions: RefCell<HashSet<String>>,
     creating_workspaces: RefCell<HashSet<String>>,
+    /// Placeholder entries for workspaces being created, newest last.
+    provisioning_workspaces: RefCell<Vec<WorkspaceEntry>>,
+    next_provisioning_id: Cell<u64>,
     removing_workspaces: RefCell<HashSet<String>>,
+    /// Repository whose settings page is open in place of a workspace.
+    settings_repository: RefCell<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -714,16 +986,34 @@ fn render_ui(
     preferred_workspace: Option<String>,
     preferred_session: Option<String>,
 ) {
-    let selected_workspace = preferred_workspace
-        .or_else(|| state.selected_workspace.borrow().clone())
-        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref));
-
+    let groups = &with_provisioning(state, groups);
     let detail_widgets = state
         .detail_widgets
         .borrow()
         .as_ref()
         .cloned()
         .expect("detail widgets initialized");
+
+    if preferred_workspace.is_some() {
+        *state.settings_repository.borrow_mut() = None;
+    }
+    let settings_group = state
+        .settings_repository
+        .borrow()
+        .as_ref()
+        .and_then(|repo| groups.iter().find(|group| &group.repo_canonical == repo))
+        .cloned();
+    if let Some(group) = settings_group {
+        detail_widgets.render_repository_settings(state, &group);
+        render_sidebar_content(groups, state, detail_widgets, None);
+        return;
+    }
+    *state.settings_repository.borrow_mut() = None;
+
+    let selected_workspace = preferred_workspace
+        .or_else(|| state.selected_workspace.borrow().clone())
+        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref));
+
     if let Some(workspace) = selected_workspace.as_ref() {
         let workspace_ref = workspace_ref(workspace);
         *state.selected_workspace.borrow_mut() = Some(workspace_ref);
@@ -752,6 +1042,21 @@ pub fn current_groups(state: &Rc<AppState>) -> Vec<WorkspaceGroup> {
     state.workspace_groups.borrow().clone()
 }
 
+/// Returns `groups` with the workspaces being created listed first in their
+/// repositories, newest first.
+fn with_provisioning(state: &Rc<AppState>, groups: &[WorkspaceGroup]) -> Vec<WorkspaceGroup> {
+    let mut groups = groups.to_vec();
+    for workspace in state.provisioning_workspaces.borrow().iter() {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.repo_canonical == workspace.repo_canonical)
+        {
+            group.workspaces.insert(0, workspace.clone());
+        }
+    }
+    groups
+}
+
 fn render_current_ui(
     state: &Rc<AppState>,
     preferred_workspace: Option<String>,
@@ -766,7 +1071,7 @@ pub(crate) fn render_selected_workspace_detail(
     workspace_ref: &str,
     preferred_session: Option<String>,
 ) {
-    let groups = current_groups(state);
+    let groups = with_provisioning(state, &current_groups(state));
     let Some(workspace) = find_workspace_by_ref(&groups, workspace_ref) else {
         return;
     };
@@ -781,7 +1086,7 @@ pub(crate) fn render_selected_workspace_detail(
 }
 
 fn render_sidebar_only(state: &Rc<AppState>) {
-    let groups = current_groups(state);
+    let groups = with_provisioning(state, &current_groups(state));
     let selected_workspace = state
         .selected_workspace
         .borrow()
@@ -946,6 +1251,11 @@ pub(crate) fn request_workspace_pr_status(
     workspace: &WorkspaceEntry,
     mark_loading: bool,
 ) {
+    // PR status is read from the local checkout.
+    if !has_local_checkout(workspace) {
+        return;
+    }
+
     let workspace_id = workspace_ref(workspace);
     if state.pending_pr_lookups.borrow().contains(&workspace_id) {
         return;
@@ -1264,14 +1574,7 @@ fn render_sidebar_content(
             .syncing_repositories
             .borrow()
             .contains(&group.repo_canonical);
-        let repo_row = build_repo_row(
-            &state,
-            &group.repo_label,
-            &group.repo_canonical,
-            group.repo_status.as_deref(),
-            is_syncing,
-            group.collapsed,
-        );
+        let repo_row = build_repo_row(&state, group, is_syncing);
         sidebar_append_static_row(&list, &repo_row);
 
         if !group.collapsed {
@@ -1358,10 +1661,12 @@ fn render_sidebar_content(
                 let rows = rows_for_signal.borrow();
                 for candidate in rows.iter() {
                     let is_selected = candidate.row == selected_row;
-                    candidate.clone_button.set_visible(is_selected);
-                    candidate.clone_button.set_sensitive(is_selected);
-                    candidate.delete_button.set_visible(is_selected);
-                    candidate.delete_button.set_sensitive(is_selected);
+                    let can_clone = is_selected && has_local_checkout(&candidate.workspace);
+                    let can_delete = is_selected && !is_creating(&candidate.workspace);
+                    candidate.clone_button.set_visible(can_clone);
+                    candidate.clone_button.set_sensitive(can_clone);
+                    candidate.delete_button.set_visible(can_delete);
+                    candidate.delete_button.set_sensitive(can_delete);
                 }
                 rows.iter()
                     .find(|workspace_row| workspace_row.row == selected_row)
@@ -1369,6 +1674,9 @@ fn render_sidebar_content(
             };
 
             if let Some(workspace) = selected_workspace {
+                if state.settings_repository.borrow_mut().take().is_some() {
+                    schedule_render_sidebar_only(&state);
+                }
                 let next_workspace_ref = workspace_ref(&workspace);
                 let preserve_session = state
                     .selected_workspace
@@ -1379,7 +1687,9 @@ fn render_sidebar_content(
                     return;
                 }
 
-                mark_used(&workspace);
+                if workspace.provisioning.is_none() {
+                    mark_used(&workspace);
+                }
                 let preferred_session =
                     preferred_session_for_workspace(&state, &next_workspace_ref, None);
                 *state.selected_workspace.borrow_mut() = Some(next_workspace_ref);
@@ -1597,20 +1907,26 @@ fn focus_repository_form_field(state: &Rc<AppState>) {
     });
 }
 
-fn build_repo_row(
-    state: &Rc<AppState>,
-    repo_label: &str,
-    repo_canonical: &str,
-    repo_status: Option<&str>,
-    is_syncing: bool,
-    collapsed: bool,
-) -> GtkBox {
+fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool) -> GtkBox {
+    let repo_label = group.repo_label.as_str();
+    let repo_canonical = group.repo_canonical.as_str();
+    let repo_status = group.repo_status.as_deref();
+    let collapsed = group.collapsed;
     let row = GtkBox::new(Orientation::Horizontal, 0);
     row.set_halign(Align::Fill);
     row.set_hexpand(true);
     row.set_valign(Align::Center);
     row.set_spacing(6);
     row.add_css_class("repo-row");
+
+    let settings_open = state
+        .settings_repository
+        .borrow()
+        .as_deref()
+        .is_some_and(|repo| repo == repo_canonical);
+    if settings_open {
+        row.add_css_class("repo-row-selected");
+    }
 
     let copy = GtkBox::new(Orientation::Vertical, 0);
     copy.set_hexpand(true);
@@ -1671,18 +1987,33 @@ fn build_repo_row(
         });
     }
 
-    let button = Button::with_label("+");
-    button.set_valign(Align::Center);
-    button.add_css_class("repo-add");
-    button.set_tooltip_text(Some("New workspace"));
+    let settings_button = Button::new();
+    settings_button.set_valign(Align::Center);
+    settings_button.add_css_class("repo-sync");
+    settings_button.add_css_class("repo-settings-button");
+    settings_button.set_tooltip_text(Some(if settings_open {
+        "Close repository settings"
+    } else {
+        "Repository settings"
+    }));
+    let settings_icon = Image::from_icon_name("emblem-system-symbolic");
+    settings_icon.set_pixel_size(14);
+    settings_button.set_child(Some(&settings_icon));
 
     {
         let state = state.clone();
         let repo_canonical = repo_canonical.to_string();
-        button.connect_clicked(move |button| {
-            create_and_edit_workspace(&state, &repo_canonical, button);
+        settings_button.connect_clicked(move |_| {
+            toggle_repository_settings(&state, &repo_canonical);
         });
     }
+
+    let is_creating = state.creating_workspaces.borrow().contains(repo_canonical);
+    let new_workspace_buttons = [SandboxKind::Local]
+        .iter()
+        .chain(&group.remote_sandboxes)
+        .map(|sandbox| build_new_workspace_button(state, repo_canonical, *sandbox, is_creating))
+        .collect::<Vec<_>>();
 
     let toggle_button = Button::new();
     toggle_button.set_valign(Align::Center);
@@ -1723,10 +2054,98 @@ fn build_repo_row(
     }
     row.add_controller(hover);
 
+    row.append(&settings_button);
     row.append(&sync_button);
-    row.append(&button);
+    for button in &new_workspace_buttons {
+        row.append(button);
+    }
     row.append(&toggle_button);
     row
+}
+
+/// Records that a remote sandbox was enabled or disabled for a repository and
+/// updates its new-workspace buttons.
+pub(crate) fn apply_sandbox_enabled(
+    state: &Rc<AppState>,
+    repo_canonical: &str,
+    sandbox: SandboxKind,
+    enabled: bool,
+) {
+    if let Some(group) = state
+        .workspace_groups
+        .borrow_mut()
+        .iter_mut()
+        .find(|group| group.repo_canonical == repo_canonical)
+    {
+        group.remote_sandboxes.retain(|enabled| *enabled != sandbox);
+        if enabled {
+            group.remote_sandboxes.push(sandbox);
+        }
+    }
+    schedule_render_sidebar_only(state);
+}
+
+fn toggle_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
+    let mut settings_repository = state.settings_repository.borrow_mut();
+    if settings_repository.as_deref() == Some(repo_canonical) {
+        *settings_repository = None;
+    } else {
+        *settings_repository = Some(repo_canonical.to_string());
+    }
+    drop(settings_repository);
+    *state.selected_workspace.borrow_mut() = None;
+    *state.editing_workspace.borrow_mut() = None;
+    *state.selected_session.borrow_mut() = None;
+    schedule_render_current_ui(state, None, None);
+}
+
+fn build_new_workspace_button(
+    state: &Rc<AppState>,
+    repo_canonical: &str,
+    sandbox: SandboxKind,
+    is_creating: bool,
+) -> Button {
+    let button = Button::new();
+    button.set_valign(Align::Center);
+    button.add_css_class("repo-add");
+    button.set_sensitive(!is_creating);
+    button.set_tooltip_text(Some(match sandbox {
+        SandboxKind::Local => "New local workspace",
+        SandboxKind::ExeDev => "New remote workspace",
+    }));
+    let icon = Image::from_icon_name(sandbox_icon_name(sandbox));
+    icon.set_pixel_size(14);
+    button.set_child(Some(&icon));
+
+    let state = state.clone();
+    let repo_canonical = repo_canonical.to_string();
+    button.connect_clicked(move |_| {
+        create_and_edit_workspace(&state, &repo_canonical, sandbox);
+    });
+    button
+}
+
+fn sandbox_icon_name(sandbox: SandboxKind) -> &'static str {
+    match sandbox {
+        SandboxKind::Local => "computer-symbolic",
+        SandboxKind::ExeDev => "weather-overcast-symbolic",
+    }
+}
+
+fn is_local(workspace: &WorkspaceEntry) -> bool {
+    workspace.sandbox == SandboxKind::Local
+}
+
+fn has_local_checkout(workspace: &WorkspaceEntry) -> bool {
+    is_local(workspace) && workspace.provisioning.is_none()
+}
+
+/// Whether the workspace is still being created, as opposed to created or failed.
+fn is_creating(workspace: &WorkspaceEntry) -> bool {
+    workspace
+        .provisioning
+        .as_ref()
+        .is_some_and(|provisioning| provisioning.error.is_none())
 }
 
 fn build_workspace_row(
@@ -1761,8 +2180,9 @@ fn build_workspace_row(
     clone_button.set_tooltip_text(Some("Clone workspace"));
     clone_button.add_css_class("workspace-action");
     clone_button.add_css_class("workspace-clone");
-    clone_button.set_visible(is_selected);
-    clone_button.set_sensitive(is_selected);
+    let can_clone = is_selected && has_local_checkout(workspace);
+    clone_button.set_visible(can_clone);
+    clone_button.set_sensitive(can_clone);
 
     let clone_icon = Image::from_icon_name("edit-copy-symbolic");
     clone_icon.set_pixel_size(12);
@@ -1781,8 +2201,9 @@ fn build_workspace_row(
     delete_button.set_tooltip_text(Some("Remove workspace"));
     delete_button.add_css_class("workspace-action");
     delete_button.add_css_class("workspace-delete");
-    delete_button.set_visible(is_selected);
-    delete_button.set_sensitive(is_selected);
+    let can_delete = is_selected && !is_creating(workspace);
+    delete_button.set_visible(can_delete);
+    delete_button.set_sensitive(can_delete);
     delete_button.set_margin_end(8);
 
     let icon = Image::from_icon_name("user-trash-symbolic");
@@ -1793,7 +2214,11 @@ fn build_workspace_row(
         let state = state.clone();
         let workspace = workspace.clone();
         delete_button.connect_clicked(move |button| {
-            remove_selected_workspace(&state, &workspace, button);
+            if workspace.provisioning.is_some() {
+                dismiss_provisioning_workspace(&state, &workspace_ref(&workspace));
+            } else {
+                remove_selected_workspace(&state, &workspace, button);
+            }
         });
     }
 
@@ -1817,10 +2242,12 @@ fn build_workspace_row(
             entry.grab_focus();
         });
     } else {
-        let meta = Label::new(Some(&workspace_meta_text(
-            &workspace.name,
-            workspace.sessions.len(),
-        )));
+        let meta_text = match &workspace.provisioning {
+            Some(Provisioning { error: Some(_), .. }) => "Failed".to_string(),
+            Some(provisioning) => format!("{} ...", provisioning.stage),
+            None => workspace_meta_text(&workspace.name, workspace.sessions.len()),
+        };
+        let meta = Label::new(Some(&meta_text));
         meta.set_xalign(0.0);
         meta.set_hexpand(true);
         meta.add_css_class("workspace-meta");
@@ -1851,9 +2278,31 @@ const WORKSPACE_PR_STATE_CLASSES: [&str; 4] = [
 ];
 
 fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceEntry) -> Widget {
+    if let Some(provisioning) = &workspace.provisioning {
+        if let Some(error) = &provisioning.error {
+            let icon = Image::from_icon_name("dialog-error-symbolic");
+            icon.set_pixel_size(SANDBOX_ICON_SIZE);
+            icon.add_css_class("workspace-provisioning-failed");
+            icon.set_tooltip_text(Some(error));
+            return icon.upcast();
+        }
+        let spinner = Spinner::new();
+        spinner.add_css_class("workspace-provisioning-spinner");
+        spinner.set_tooltip_text(Some(&provisioning.stage));
+        spinner.start();
+        return spinner.upcast();
+    }
+
+    // The sandbox icon doubles as the PR status indicator via its color.
     let indicator = GtkBox::new(Orientation::Horizontal, 0);
     indicator.add_css_class("workspace-pr-indicator");
+    let icon = Image::from_icon_name(sandbox_icon_name(workspace.sandbox));
+    icon.set_pixel_size(SANDBOX_ICON_SIZE);
+    indicator.append(&icon);
     set_workspace_status_indicator(&indicator, &workspace_pr_snapshot(state, workspace));
+    if !is_local(workspace) {
+        indicator.set_tooltip_text(Some("Remote workspace"));
+    }
     state
         .pr_indicators
         .borrow_mut()
@@ -1898,6 +2347,11 @@ fn set_workspace_status_indicator(indicator: &GtkBox, pr_state: &WorkspacePrStat
 }
 
 fn install_branch_monitor(state: &Rc<AppState>, workspace: &WorkspaceEntry, branch: &Label) {
+    // Remote and not-yet-created checkouts have no local HEAD to watch.
+    if !has_local_checkout(workspace) {
+        return;
+    }
+
     let head_path = match workspace_head_path(&workspace.path) {
         Ok(path) => path,
         Err(err) => {
@@ -1959,7 +2413,7 @@ fn build_content(detail_container: GtkBox) -> GtkBox {
     content
 }
 
-fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str, button: &Button) {
+fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str, sandbox: SandboxKind) {
     if !state
         .creating_workspaces
         .borrow_mut()
@@ -1967,29 +2421,114 @@ fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str, button:
     {
         return;
     }
-    button.set_sensitive(false);
+
+    // Show the workspace right away and fill it in once creation finishes.
+    let id = state.next_provisioning_id.get();
+    state.next_provisioning_id.set(id + 1);
+    let placeholder = WorkspaceEntry {
+        repo_canonical: repo_canonical.to_string(),
+        // Workspace names cannot contain whitespace, so this never collides.
+        name: format!("new workspace {id}"),
+        branch: "New workspace".to_string(),
+        path: String::new(),
+        sandbox,
+        sessions: Vec::new(),
+        recently_used: true,
+        provisioning: Some(Provisioning {
+            stage: "Starting".to_string(),
+            error: None,
+        }),
+    };
+    let placeholder_ref = workspace_ref(&placeholder);
+    state.provisioning_workspaces.borrow_mut().push(placeholder);
+    *state.selected_workspace.borrow_mut() = Some(placeholder_ref.clone());
+    schedule_render_current_ui(state, Some(placeholder_ref.clone()), None);
+
+    let (progress_tx, mut progress_rx) = mpsc::unbounded_channel::<String>();
+    {
+        let state = state.clone();
+        let placeholder_ref = placeholder_ref.clone();
+        glib::spawn_future_local(async move {
+            while let Some(stage) = progress_rx.recv().await {
+                update_provisioning(&state, &placeholder_ref, |provisioning| {
+                    provisioning.stage = stage;
+                });
+            }
+        });
+    }
 
     let state = state.clone();
     let repo_canonical = repo_canonical.to_string();
-    let button = button.clone();
     exec::dispatch(
-        create_workspace(repo_canonical.clone(), None),
+        create_workspace(repo_canonical.clone(), None, sandbox, move |stage| {
+            let _ = progress_tx.send(stage.to_string());
+        }),
         move |result| {
             state
                 .creating_workspaces
                 .borrow_mut()
                 .remove(&repo_canonical);
-            button.set_sensitive(true);
             match result {
                 Ok(workspace) => {
-                    select_and_edit_new_workspace(&state, workspace);
+                    state
+                        .provisioning_workspaces
+                        .borrow_mut()
+                        .retain(|entry| workspace_ref(entry) != placeholder_ref);
+                    let was_selected = state
+                        .selected_workspace
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|selected| selected == &placeholder_ref);
+                    if was_selected {
+                        select_and_edit_new_workspace(&state, workspace);
+                    } else {
+                        insert_workspace(&state, workspace);
+                        schedule_render_current_ui(&state, None, None);
+                    }
                 }
                 Err(err) => {
                     eprintln!("failed to create workspace: {err}");
+                    update_provisioning(&state, &placeholder_ref, |provisioning| {
+                        provisioning.error = Some(err.to_string());
+                    });
                 }
             }
         },
     );
+}
+
+fn update_provisioning(
+    state: &Rc<AppState>,
+    placeholder_ref: &str,
+    update: impl FnOnce(&mut Provisioning),
+) {
+    let mut placeholders = state.provisioning_workspaces.borrow_mut();
+    let Some(provisioning) = placeholders
+        .iter_mut()
+        .find(|entry| workspace_ref(entry) == placeholder_ref)
+        .and_then(|entry| entry.provisioning.as_mut())
+    else {
+        return;
+    };
+    update(provisioning);
+    drop(placeholders);
+    schedule_render_current_ui(state, None, None);
+}
+
+fn dismiss_provisioning_workspace(state: &Rc<AppState>, placeholder_ref: &str) {
+    state
+        .provisioning_workspaces
+        .borrow_mut()
+        .retain(|entry| workspace_ref(entry) != placeholder_ref);
+    let was_selected = state
+        .selected_workspace
+        .borrow()
+        .as_deref()
+        .is_some_and(|selected| selected == placeholder_ref);
+    if was_selected {
+        *state.selected_workspace.borrow_mut() = None;
+    }
+    schedule_render_current_ui(state, None, None);
 }
 
 fn clone_and_edit_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, button: &Button) {
@@ -2031,8 +2570,20 @@ fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry
     let workspace_ref = workspace_ref(&workspace);
     let selected_session = workspace.sessions.first().map(|session| session.id.clone());
     let preferred_session = selected_session.clone();
-    let mut next_groups = current_groups(state);
-    if let Some(group) = next_groups
+    // Only local workspaces can be renamed.
+    let editable = is_local(&workspace);
+    insert_workspace(state, workspace);
+    *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
+    if editable {
+        *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
+    }
+    remember_selected_session(state, &workspace_ref, selected_session.as_deref());
+    schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
+}
+
+fn insert_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry) {
+    let mut groups = state.workspace_groups.borrow_mut();
+    if let Some(group) = groups
         .iter_mut()
         .find(|group| group.repo_canonical == workspace.repo_canonical)
     {
@@ -2040,11 +2591,6 @@ fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry
         group.workspace_count = group.workspaces.len();
         group.recently_used = true;
     }
-    *state.workspace_groups.borrow_mut() = next_groups.clone();
-    *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
-    *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
-    remember_selected_session(state, &workspace_ref, selected_session.as_deref());
-    schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
 }
 
 /// Splits items into those shown directly and those folded behind a "N more"
