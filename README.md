@@ -1,9 +1,13 @@
 <p align="center">
-  <img src=".github/assets/hero.png" width="600" alt="Splay">
+  <img src=".github/assets/logo.svg" width="128" alt="Splay logo">
 </p>
 
 <h1 align="center">Splay</h1>
 <p align="center"><em>Fan out your agents.</em></p>
+
+<p align="center">
+  <img src=".github/assets/hero.png" width="600" alt="Splay">
+</p>
 
 Splay is a workspace manager for parallel coding agent development, similar to [cmux](https://github.com/manaflow-ai/cmux), [Superset](https://github.com/superset-sh/superset), and [Conductor](https://www.conductor.build/). Register git repositories, spin up isolated worktrees, and run persistent terminal sessions inside them from a native GTK desktop app or the CLI.
 

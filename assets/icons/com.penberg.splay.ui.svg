@@ -1,14 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" fill="none">
-  <g stroke="#111111" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M128 224 V150"/>
-    <path d="M128 150 C128 122, 42 132, 42 96"/>
-    <path d="M128 150 C128 118, 82 104, 82 62"/>
-    <path d="M128 150 V54"/>
-    <path d="M128 150 C128 118, 174 104, 174 62"/>
-    <path d="M128 150 C128 122, 214 132, 214 96"/>
-  </g>
-  <g fill="#111111">
-    <circle cx="42" cy="86" r="16"/><circle cx="82" cy="52" r="16"/><circle cx="128" cy="42" r="16"/>
-    <circle cx="174" cy="52" r="16"/><circle cx="214" cy="86" r="16"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 144 144" role="img" aria-label="Splay logo"><rect x="18" y="18" width="144" height="144" rx="30" fill="#1d1a14"/><rect x="38" y="38" width="44" height="44" rx="7" fill="#f7f2e7"/><rect x="98" y="38" width="44" height="44" rx="7" fill="#f7f2e7"/><rect x="38" y="98" width="44" height="44" rx="7" fill="#f7f2e7"/><rect x="98" y="98" width="44" height="44" rx="7" fill="#c8571f"/></svg>
