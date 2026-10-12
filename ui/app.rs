@@ -233,14 +233,8 @@ window {
   color: #b6dcff;
 }
 
-/* Shown on hover, like the sync status, and while the settings page is open. */
-.repo-settings-button {
-  opacity: 0;
-}
-
-.repo-row-hover .repo-settings-button,
 .repo-row-selected .repo-settings-button {
-  opacity: 1;
+  color: #b6dcff;
 }
 
 .repo-settings {
@@ -258,7 +252,48 @@ window {
   color: #6f7887;
   font-size: 12px;
   margin-top: 4px;
-  margin-bottom: 30px;
+  margin-bottom: 22px;
+}
+
+.settings-tabs {
+  margin-bottom: 26px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.settings-tab {
+  min-height: 0;
+  margin: 0 22px -1px 0;
+  padding: 8px 2px 10px 2px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  color: #7a8698;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-tab:hover {
+  color: #dfe6ef;
+}
+
+.settings-tab:checked {
+  color: #f3f5f7;
+  border-bottom-color: #7ecbff;
+}
+
+.settings-card:disabled {
+  opacity: 0.45;
+}
+
+.settings-notice {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(216, 163, 65, 0.10);
+  color: #e6c27a;
+  font-size: 12px;
 }
 
 .settings-section-heading {

@@ -194,7 +194,15 @@ pub async fn create_workspace(
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
 }
 
-pub async fn load_repository_details(repository: String) -> Result<RepositoryDetails, SplayError> {
+/// Everything the repository settings page shows.
+pub struct RepositorySettings {
+    pub details: RepositoryDetails,
+    pub setup_script: String,
+}
+
+pub async fn load_repository_settings(
+    repository: String,
+) -> Result<RepositorySettings, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let repo = repo_store
         .resolve_repository(&repository)
@@ -207,21 +215,20 @@ pub async fn load_repository_details(repository: String) -> Result<RepositoryDet
         }
         _ => mirror_path,
     };
-
-    Ok(RepositoryDetails {
-        remote_url: repo.remote_url(),
-        default_branch: repo_store.default_branch(&repo),
-        mirror_path,
-        alias: repo.alias,
-    })
-}
-
-pub async fn load_setup_script(repository: String) -> Result<String, SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    Ok(repo_store
+    let setup_script = repo_store
         .setup_script(&repository)
         .await?
-        .unwrap_or_default())
+        .unwrap_or_default();
+
+    Ok(RepositorySettings {
+        details: RepositoryDetails {
+            remote_url: repo.remote_url(),
+            default_branch: repo_store.default_branch(&repo),
+            mirror_path,
+            alias: repo.alias,
+        },
+        setup_script,
+    })
 }
 
 pub async fn save_setup_script(repository: String, script: String) -> Result<(), SplayError> {
