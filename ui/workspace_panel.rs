@@ -1,6 +1,7 @@
 use gtk::{
     Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Stack, glib, prelude::*,
 };
+use splay::forges::github::{self, PullRequestStatus};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -9,7 +10,6 @@ use std::{
     sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
-use swarm::forges::github::{self, PullRequestStatus};
 
 use crate::{
     app::{

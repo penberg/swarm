@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "swarm")]
+#[command(name = "splay")]
 #[command(about = "Manage coding-agent repositories and workspaces")]
 pub struct Opts {
     #[command(subcommand)]

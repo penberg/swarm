@@ -1,8 +1,8 @@
 [package]
-name = "swarm"
+name = "splay"
 version = "0.1.6"
 edition = "2024"
-repository = "https://github.com/penberg/swarm"
+repository = "https://github.com/penberg/splay"
 
 [lib]
 path = "lib.rs"
@@ -28,12 +28,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 turso = "0.4"
 
 [[bin]]
-name = "swarmctl"
-path = "swarmctl.rs"
+name = "splayctl"
+path = "splayctl.rs"
 
 [[bin]]
-name = "swarm"
-path = "ui/swarm.rs"
+name = "splay"
+path = "ui/splay.rs"
 required-features = ["ui"]
 
 # The profile that 'dist' will build with

@@ -16,7 +16,7 @@ use std::{
 use turso::{Builder, Connection, Row};
 
 use crate::{
-    SwarmError, database_error,
+    SplayError, database_error,
     repos::{Repository, RepositoryStore},
     toolchains,
     workspaces::{Workspace, WorkspaceStore, migrate_repo_db},
@@ -57,7 +57,7 @@ pub fn default_session_command() -> Vec<String> {
 }
 
 impl SessionStore {
-    pub async fn open() -> Result<Self, SwarmError> {
+    pub async fn open() -> Result<Self, SplayError> {
         Ok(Self {
             repos: RepositoryStore::open().await?,
             workspaces: WorkspaceStore::open().await?,
@@ -68,9 +68,9 @@ impl SessionStore {
         &self,
         workspace_ref: &str,
         command: &[String],
-    ) -> Result<Session, SwarmError> {
+    ) -> Result<Session, SplayError> {
         if command.is_empty() {
-            return Err(SwarmError::InvalidSession("missing command".to_string()));
+            return Err(SplayError::InvalidSession("missing command".to_string()));
         }
 
         let (repo, workspace) = self.workspaces.resolve_reference(workspace_ref).await?;
@@ -107,7 +107,7 @@ impl SessionStore {
         self.info(&session.id).await
     }
 
-    pub async fn list(&self, workspace_ref: Option<&str>) -> Result<Vec<Session>, SwarmError> {
+    pub async fn list(&self, workspace_ref: Option<&str>) -> Result<Vec<Session>, SplayError> {
         if let Some(workspace_ref) = workspace_ref {
             let (repo, workspace) = self.workspaces.resolve_reference(workspace_ref).await?;
             let db = self.open_repo_db(&repo).await?;
@@ -128,14 +128,14 @@ impl SessionStore {
         Ok(sessions)
     }
 
-    pub async fn info(&self, session_id: &str) -> Result<Session, SwarmError> {
+    pub async fn info(&self, session_id: &str) -> Result<Session, SplayError> {
         let (repo, mut session, db) = self.find_session(session_id).await?;
         self.refresh_session_status(&db, &repo, &mut session)
             .await?;
         Ok(session)
     }
 
-    pub async fn stop(&self, session_id: &str) -> Result<Session, SwarmError> {
+    pub async fn stop(&self, session_id: &str) -> Result<Session, SplayError> {
         let (_repo, mut session, db) = self.find_session(session_id).await?;
 
         if matches!(
@@ -166,7 +166,7 @@ impl SessionStore {
         Ok(session)
     }
 
-    pub async fn remove(&self, session_id: &str) -> Result<Session, SwarmError> {
+    pub async fn remove(&self, session_id: &str) -> Result<Session, SplayError> {
         let (repo, mut session, db) = self.find_session(session_id).await?;
         self.refresh_session_status(&db, &repo, &mut session)
             .await?;
@@ -175,7 +175,7 @@ impl SessionStore {
             session.status.as_str(),
             SESSION_STATUS_RUNNING | SESSION_STATUS_STARTING
         ) {
-            return Err(SwarmError::SessionRunning(session.id.clone()));
+            return Err(SplayError::SessionRunning(session.id.clone()));
         }
 
         db.execute("DELETE FROM sessions WHERE id = ?1", [session.id.as_str()])
@@ -188,7 +188,7 @@ impl SessionStore {
         Ok(session)
     }
 
-    pub async fn prune_terminal_sessions(&self) -> Result<usize, SwarmError> {
+    pub async fn prune_terminal_sessions(&self) -> Result<usize, SplayError> {
         let sessions = self.list(None).await?;
         let mut pruned = 0;
 
@@ -205,7 +205,7 @@ impl SessionStore {
         Ok(pruned)
     }
 
-    pub async fn attach(&self, session_id: &str, _follow: bool) -> Result<(), SwarmError> {
+    pub async fn attach(&self, session_id: &str, _follow: bool) -> Result<(), SplayError> {
         let (repo, mut session, db) = self.find_session(session_id).await?;
         self.refresh_session_status(&db, &repo, &mut session)
             .await?;
@@ -224,7 +224,7 @@ impl SessionStore {
         workspace: &Workspace,
         session_id: &str,
         command: &[String],
-    ) -> Result<Session, SwarmError> {
+    ) -> Result<Session, SplayError> {
         let sessions_dir = self.repos.sessions_dir(repo);
         let session_path = sessions_dir.join(session_id);
         let log_path = session_path.join("log");
@@ -264,7 +264,7 @@ impl SessionStore {
         workspace: &Workspace,
         session: &Session,
         command: &[String],
-    ) -> Result<(), SwarmError> {
+    ) -> Result<(), SplayError> {
         let exe = supervisor_executable()?;
         let supervisor_log_path = session.path.join("supervisor.log");
         let supervisor_log = OpenOptions::new()
@@ -296,7 +296,7 @@ impl SessionStore {
         &self,
         repo: &Repository,
         session: &Session,
-    ) -> Result<(), SwarmError> {
+    ) -> Result<(), SplayError> {
         let deadline = Instant::now() + Duration::from_secs(3);
         let ready_path = session.path.join("ready");
         loop {
@@ -307,7 +307,7 @@ impl SessionStore {
             if Instant::now() >= deadline {
                 self.mark_session_failed(repo, &session.id).await?;
                 let detail = read_supervisor_log(&session.path);
-                return Err(SwarmError::InvalidSession(format!(
+                return Err(SplayError::InvalidSession(format!(
                     "session `{}` did not become ready{}",
                     session.id, detail
                 )));
@@ -320,7 +320,7 @@ impl SessionStore {
     async fn find_session(
         &self,
         session_id: &str,
-    ) -> Result<(Repository, Session, Connection), SwarmError> {
+    ) -> Result<(Repository, Session, Connection), SplayError> {
         let repos = self.repos.list().await?;
 
         for repo in repos {
@@ -330,7 +330,7 @@ impl SessionStore {
             }
         }
 
-        Err(SwarmError::SessionNotFound(session_id.to_string()))
+        Err(SplayError::SessionNotFound(session_id.to_string()))
     }
 
     async fn list_repo_sessions(
@@ -338,7 +338,7 @@ impl SessionStore {
         db: &Connection,
         repo: &Repository,
         workspace_name: Option<&str>,
-    ) -> Result<Vec<Session>, SwarmError> {
+    ) -> Result<Vec<Session>, SplayError> {
         let sql = if workspace_name.is_some() {
             "SELECT id, workspace_name, command_json, path, log_path, socket_path, pid, status, exit_code, created_at, stopped_at
              FROM sessions
@@ -376,7 +376,7 @@ impl SessionStore {
         db: &Connection,
         repo: &Repository,
         session_id: &str,
-    ) -> Result<Option<Session>, SwarmError> {
+    ) -> Result<Option<Session>, SplayError> {
         let mut stmt = db
             .prepare(
                 "SELECT id, workspace_name, command_json, path, log_path, socket_path, pid, status, exit_code, created_at, stopped_at
@@ -398,7 +398,7 @@ impl SessionStore {
         &self,
         repo: &Repository,
         session_id: &str,
-    ) -> Result<(), SwarmError> {
+    ) -> Result<(), SplayError> {
         let db = self.open_repo_db(repo).await?;
         db.execute(
             "UPDATE sessions
@@ -419,7 +419,7 @@ impl SessionStore {
         &self,
         repo: &Repository,
         session: &Session,
-    ) -> Result<(), SwarmError> {
+    ) -> Result<(), SplayError> {
         let pid_path = session.path.join("child.pid");
         let pid = fs::read_to_string(&pid_path)
             .ok()
@@ -447,7 +447,7 @@ impl SessionStore {
         db: &Connection,
         _repo: &Repository,
         session: &mut Session,
-    ) -> Result<(), SwarmError> {
+    ) -> Result<(), SplayError> {
         if !matches!(
             session.status.as_str(),
             SESSION_STATUS_RUNNING | SESSION_STATUS_STARTING
@@ -482,7 +482,7 @@ impl SessionStore {
         Ok(())
     }
 
-    async fn open_repo_db(&self, repo: &Repository) -> Result<Connection, SwarmError> {
+    async fn open_repo_db(&self, repo: &Repository) -> Result<Connection, SplayError> {
         let repo_db_path = self.repos.repo_db_path(repo);
         let db = Builder::new_local(path_to_string(&repo_db_path)?)
             .build()
@@ -504,9 +504,9 @@ pub async fn serve_runtime(
     session_dir: &str,
     workspace_dir: &str,
     command: &[String],
-) -> Result<(), SwarmError> {
+) -> Result<(), SplayError> {
     if command.is_empty() {
-        return Err(SwarmError::InvalidSession("missing command".to_string()));
+        return Err(SplayError::InvalidSession("missing command".to_string()));
     }
 
     let session_path = PathBuf::from(session_dir);
@@ -534,7 +534,7 @@ pub async fn serve_runtime(
     let repo_dir = workspace_path
         .parent()
         .and_then(|path| path.parent())
-        .ok_or(SwarmError::PathResolution)?;
+        .ok_or(SplayError::PathResolution)?;
     let (pty, child_pid) = spawn_pty_child(
         &workspace_path,
         &toolchains::session_env(repo_dir, &workspace_path),
@@ -567,7 +567,7 @@ pub async fn serve_runtime(
     .await
 }
 
-fn session_from_row(repo: &Repository, row: &Row) -> Result<Session, SwarmError> {
+fn session_from_row(repo: &Repository, row: &Row) -> Result<Session, SplayError> {
     Ok(Session {
         id: row.get::<String>(0)?,
         repository: repo.canonical(),
@@ -615,7 +615,7 @@ async fn session_event_loop(
     pty: &Pty,
     listener: UnixListener,
     log_path: &Path,
-) -> Result<(), SwarmError> {
+) -> Result<(), SplayError> {
     let listener_fd = listener.as_raw_fd();
     let master_fd = pty.master_fd;
     let mut clients: Vec<UnixStream> = Vec::new();
@@ -722,7 +722,7 @@ async fn session_event_loop(
     }
 }
 
-async fn open_repo_db_at_path(path: &Path) -> Result<Connection, SwarmError> {
+async fn open_repo_db_at_path(path: &Path) -> Result<Connection, SplayError> {
     let db = Builder::new_local(path_to_string(path)?)
         .build()
         .await
@@ -734,9 +734,9 @@ async fn open_repo_db_at_path(path: &Path) -> Result<Connection, SwarmError> {
     Ok(conn)
 }
 
-fn supervisor_executable() -> Result<PathBuf, SwarmError> {
+fn supervisor_executable() -> Result<PathBuf, SplayError> {
     let exe = env::current_exe()?;
-    let candidate = exe.with_file_name("swarmctl");
+    let candidate = exe.with_file_name("splayctl");
 
     if candidate.exists() {
         return Ok(candidate);
@@ -745,7 +745,7 @@ fn supervisor_executable() -> Result<PathBuf, SwarmError> {
     Ok(exe)
 }
 
-fn attach_to_socket(socket_path: &Path) -> Result<(), SwarmError> {
+fn attach_to_socket(socket_path: &Path) -> Result<(), SplayError> {
     let mut socket = UnixStream::connect(socket_path)?;
     let socket_fd = socket.as_raw_fd();
     let stdin_fd = io::stdin().as_raw_fd();
@@ -756,7 +756,7 @@ fn attach_to_socket(socket_path: &Path) -> Result<(), SwarmError> {
     enable_raw_mode()?;
     let _ = stdout.write_all(b"[attached, press Ctrl-] to detach]\r\n");
     let _ = stdout.flush();
-    let result = (|| -> Result<(), SwarmError> {
+    let result = (|| -> Result<(), SplayError> {
         loop {
             let mut poll_fds = [
                 libc::pollfd {
@@ -823,7 +823,7 @@ fn attach_to_socket(socket_path: &Path) -> Result<(), SwarmError> {
     result
 }
 
-fn print_file(path: &Path) -> Result<(), SwarmError> {
+fn print_file(path: &Path) -> Result<(), SplayError> {
     let mut file = File::open(path)?;
     let mut stdout = io::stdout();
     io::copy(&mut file, &mut stdout)?;
@@ -831,7 +831,7 @@ fn print_file(path: &Path) -> Result<(), SwarmError> {
     Ok(())
 }
 
-fn terminate_process(pid: u32) -> Result<(), SwarmError> {
+fn terminate_process(pid: u32) -> Result<(), SplayError> {
     let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     if rc == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
         return Ok(());
@@ -840,7 +840,7 @@ fn terminate_process(pid: u32) -> Result<(), SwarmError> {
     Err(io::Error::last_os_error().into())
 }
 
-fn process_exists(pid: u32) -> Result<bool, SwarmError> {
+pub(crate) fn process_exists(pid: u32) -> Result<bool, SplayError> {
     let rc = unsafe { libc::kill(pid as i32, 0) };
     if rc == 0 {
         return Ok(true);
@@ -853,7 +853,7 @@ fn process_exists(pid: u32) -> Result<bool, SwarmError> {
     }
 }
 
-fn reap_process(pid: u32) -> Result<Option<i32>, SwarmError> {
+fn reap_process(pid: u32) -> Result<Option<i32>, SplayError> {
     let mut status = 0_i32;
     let rc = unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) };
     if rc == 0 {
@@ -915,7 +915,7 @@ fn spawn_pty_child(
     cwd: &Path,
     session_env: &[toolchains::SessionEnvVar],
     command: &[String],
-) -> Result<(Pty, u32), SwarmError> {
+) -> Result<(Pty, u32), SplayError> {
     let mut winsize = libc::winsize {
         ws_row: 24,
         ws_col: 80,
@@ -990,7 +990,7 @@ fn spawn_pty_child(
     }
 
     if master_fd < 0 {
-        return Err(SwarmError::InvalidSession(
+        return Err(SplayError::InvalidSession(
             "forkpty did not return a master fd".to_string(),
         ));
     }
@@ -1010,8 +1010,8 @@ fn new_session_id() -> String {
     format!("s{:x}{:x}", now.as_secs(), now.subsec_millis())
 }
 
-fn path_to_string(path: &Path) -> Result<&str, SwarmError> {
-    path.to_str().ok_or(SwarmError::PathResolution)
+fn path_to_string(path: &Path) -> Result<&str, SplayError> {
+    path.to_str().ok_or(SplayError::PathResolution)
 }
 
 fn unix_timestamp() -> i64 {

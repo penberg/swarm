@@ -1,9 +1,16 @@
-# Swarm Changelog
+# Splay Changelog
 
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Changed
+
+- Rename the project from Swarm to Splay. The binaries are now `splay` and `splayctl`, and the GTK application ID is `com.penberg.splay.ui`.
+- Move state from `~/.local/share/swarm` to `~/.local/share/splay` automatically on first start, rewriting stored paths and repairing git worktrees.
 
 ## [0.1.5] - 2026-04-22
 

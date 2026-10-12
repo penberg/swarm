@@ -8,7 +8,7 @@ use std::{
 use turso::{Builder, Connection};
 
 use crate::{
-    SwarmError, database_error,
+    SplayError, database_error,
     repos::{Repository, RepositoryStore},
 };
 
@@ -39,7 +39,7 @@ pub struct PruneReport {
 pub struct PruneFailure {
     pub name: String,
     pub path: PathBuf,
-    pub error: SwarmError,
+    pub error: SplayError,
 }
 
 pub struct WorkspaceStore {
@@ -47,7 +47,7 @@ pub struct WorkspaceStore {
 }
 
 impl WorkspaceStore {
-    pub async fn open() -> Result<Self, SwarmError> {
+    pub async fn open() -> Result<Self, SplayError> {
         Ok(Self {
             repos: RepositoryStore::open().await?,
         })
@@ -57,12 +57,12 @@ impl WorkspaceStore {
         &self,
         repository: &str,
         name: Option<&str>,
-    ) -> Result<Workspace, SwarmError> {
+    ) -> Result<Workspace, SplayError> {
         let repo = self
             .repos
             .resolve_repository(repository)
             .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
         let db = self.open_repo_db(&repo).await?;
         let default_branch = self.ensure_bare_repo(&repo)?;
         let requested_name = resolve_workspace_name(name)?;
@@ -103,7 +103,7 @@ impl WorkspaceStore {
         })
     }
 
-    pub async fn clone(&self, workspace: &str, name: &str) -> Result<Workspace, SwarmError> {
+    pub async fn clone(&self, workspace: &str, name: &str) -> Result<Workspace, SplayError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -112,7 +112,7 @@ impl WorkspaceStore {
         let source = self
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
-            .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))?;
+            .ok_or_else(|| SplayError::WorkspaceNotFound(workspace.to_string()))?;
         let requested_name = resolve_workspace_name(Some(name))?;
         let workspaces_dir = self.repos.workspaces_dir(&repo);
         fs::create_dir_all(&workspaces_dir)?;
@@ -151,12 +151,12 @@ impl WorkspaceStore {
         })
     }
 
-    pub async fn list(&self, repository: &str) -> Result<Vec<Workspace>, SwarmError> {
+    pub async fn list(&self, repository: &str) -> Result<Vec<Workspace>, SplayError> {
         let repo = self
             .repos
             .resolve_repository(repository)
             .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
         let db = self.open_repo_db(&repo).await?;
         let mut stmt = db
             .prepare(
@@ -185,7 +185,7 @@ impl WorkspaceStore {
         Ok(workspaces)
     }
 
-    pub async fn info(&self, workspace: &str) -> Result<Workspace, SwarmError> {
+    pub async fn info(&self, workspace: &str) -> Result<Workspace, SplayError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -194,10 +194,10 @@ impl WorkspaceStore {
 
         self.find_workspace(&db, &repo, &reference.workspace)
             .await?
-            .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))
+            .ok_or_else(|| SplayError::WorkspaceNotFound(workspace.to_string()))
     }
 
-    pub async fn remove(&self, workspace: &str) -> Result<Workspace, SwarmError> {
+    pub async fn remove(&self, workspace: &str) -> Result<Workspace, SplayError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -206,7 +206,7 @@ impl WorkspaceStore {
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
-            .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))?;
+            .ok_or_else(|| SplayError::WorkspaceNotFound(workspace.to_string()))?;
 
         let archived_time = unix_timestamp();
         db.execute(
@@ -220,12 +220,12 @@ impl WorkspaceStore {
             ..workspace
         })
     }
-    pub async fn prune(&self, repository: &str) -> Result<PruneReport, SwarmError> {
+    pub async fn prune(&self, repository: &str) -> Result<PruneReport, SplayError> {
         let repo = self
             .repos
             .resolve_repository(repository)
             .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
         let db = self.open_repo_db(&repo).await?;
         let mut stmt = db
             .prepare("SELECT name, path FROM workspaces WHERE archived_at IS NOT NULL")
@@ -288,7 +288,7 @@ impl WorkspaceStore {
         Ok(report)
     }
 
-    pub async fn rename(&self, workspace: &str, new_name: &str) -> Result<Workspace, SwarmError> {
+    pub async fn rename(&self, workspace: &str, new_name: &str) -> Result<Workspace, SplayError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -297,7 +297,7 @@ impl WorkspaceStore {
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
-            .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))?;
+            .ok_or_else(|| SplayError::WorkspaceNotFound(workspace.to_string()))?;
         let next_name = resolve_workspace_name(Some(new_name))?;
 
         if next_name == workspace.name {
@@ -305,7 +305,7 @@ impl WorkspaceStore {
         }
 
         if self.find_workspace(&db, &repo, &next_name).await?.is_some() {
-            return Err(SwarmError::DuplicateWorkspace(format!(
+            return Err(SplayError::DuplicateWorkspace(format!(
                 "{}:{}",
                 repo.alias.as_deref().unwrap_or(&repo.name),
                 next_name
@@ -314,7 +314,7 @@ impl WorkspaceStore {
 
         let sessions = self.count_workspace_sessions(&db, &workspace.name).await?;
         if sessions > 0 {
-            return Err(SwarmError::InvalidWorkspace(format!(
+            return Err(SplayError::InvalidWorkspace(format!(
                 "cannot rename workspace `{}` with sessions",
                 workspace.name
             )));
@@ -324,7 +324,7 @@ impl WorkspaceStore {
         let next_path = workspace
             .path
             .parent()
-            .ok_or(SwarmError::PathResolution)?
+            .ok_or(SplayError::PathResolution)?
             .join(&next_name);
 
         run_git(
@@ -376,14 +376,14 @@ impl WorkspaceStore {
     async fn resolve_repo_from_workspace_reference(
         &self,
         reference: &WorkspaceReference,
-    ) -> Result<Repository, SwarmError> {
+    ) -> Result<Repository, SplayError> {
         self.repos
             .resolve_repository(&reference.repository)
             .await?
-            .ok_or_else(|| SwarmError::RepositoryNotFound(reference.repository.clone()))
+            .ok_or_else(|| SplayError::RepositoryNotFound(reference.repository.clone()))
     }
 
-    async fn open_repo_db(&self, repo: &Repository) -> Result<Connection, SwarmError> {
+    async fn open_repo_db(&self, repo: &Repository) -> Result<Connection, SplayError> {
         let repo_db_path = self.repos.repo_db_path(repo);
         let db = Builder::new_local(path_to_string(&repo_db_path)?)
             .build()
@@ -402,7 +402,7 @@ impl WorkspaceStore {
     pub async fn resolve_reference(
         &self,
         workspace: &str,
-    ) -> Result<(Repository, Workspace), SwarmError> {
+    ) -> Result<(Repository, Workspace), SplayError> {
         let reference = parse_workspace_reference(workspace)?;
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
@@ -411,7 +411,7 @@ impl WorkspaceStore {
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
-            .ok_or_else(|| SwarmError::WorkspaceNotFound(workspace.to_string()))?;
+            .ok_or_else(|| SplayError::WorkspaceNotFound(workspace.to_string()))?;
 
         Ok((repo, workspace))
     }
@@ -421,7 +421,7 @@ impl WorkspaceStore {
         db: &Connection,
         repo: &Repository,
         name: &str,
-    ) -> Result<Option<Workspace>, SwarmError> {
+    ) -> Result<Option<Workspace>, SplayError> {
         let mut stmt = db
             .prepare(
                 "SELECT name, branch, path, created_at, archived_at
@@ -452,7 +452,7 @@ impl WorkspaceStore {
         &self,
         db: &Connection,
         workspace: Workspace,
-    ) -> Result<Workspace, SwarmError> {
+    ) -> Result<Workspace, SplayError> {
         let branch = git_current_branch(&workspace.path)?;
         if branch == workspace.branch {
             return Ok(workspace);
@@ -476,7 +476,7 @@ impl WorkspaceStore {
         &self,
         db: &Connection,
         workspace_name: &str,
-    ) -> Result<i64, SwarmError> {
+    ) -> Result<i64, SplayError> {
         let mut stmt = db
             .prepare(
                 "SELECT COUNT(*)
@@ -497,7 +497,7 @@ impl WorkspaceStore {
         db: &Connection,
         workspaces_dir: &Path,
         requested_name: &str,
-    ) -> Result<String, SwarmError> {
+    ) -> Result<String, SplayError> {
         if !Self::workspace_name_exists(db, workspaces_dir, requested_name).await? {
             return Ok(requested_name.to_string());
         }
@@ -517,7 +517,7 @@ impl WorkspaceStore {
         db: &Connection,
         workspaces_dir: &Path,
         name: &str,
-    ) -> Result<bool, SwarmError> {
+    ) -> Result<bool, SplayError> {
         let mut stmt = db
             .prepare(
                 "SELECT 1
@@ -539,7 +539,7 @@ impl WorkspaceStore {
         &self,
         db: &Connection,
         repo: &Repository,
-    ) -> Result<(), SwarmError> {
+    ) -> Result<(), SplayError> {
         let workspaces_dir = self.repos.workspaces_dir(repo);
         if !workspaces_dir.exists() {
             return Ok(());
@@ -605,7 +605,7 @@ impl WorkspaceStore {
         Ok(())
     }
 
-    fn ensure_bare_repo(&self, repo: &Repository) -> Result<String, SwarmError> {
+    fn ensure_bare_repo(&self, repo: &Repository) -> Result<String, SplayError> {
         let bare_repo_path = self.repos.bare_repo_path(repo);
         self.repos.sync_repo(repo)?;
 
@@ -632,7 +632,7 @@ impl WorkspaceStore {
         workspace_path: &Path,
         workspace_name: &str,
         default_branch: &str,
-    ) -> Result<String, SwarmError> {
+    ) -> Result<String, SplayError> {
         let args = build_worktree_add_args(
             bare_repo_path,
             workspace_path,
@@ -652,7 +652,7 @@ impl WorkspaceStore {
         source: &Workspace,
         workspace_path: &Path,
         workspace_name: &str,
-    ) -> Result<String, SwarmError> {
+    ) -> Result<String, SplayError> {
         let source_head = git_rev_parse(&source.path, "HEAD")?;
         let args = build_clone_worktree_add_args(
             bare_repo_path,
@@ -668,18 +668,18 @@ impl WorkspaceStore {
     }
 }
 
-pub fn parse_workspace_reference(input: &str) -> Result<WorkspaceReference, SwarmError> {
+pub fn parse_workspace_reference(input: &str) -> Result<WorkspaceReference, SplayError> {
     let split = input
         .rsplit_once(':')
         .or_else(|| input.rsplit_once('/'))
-        .ok_or_else(|| SwarmError::InvalidWorkspaceReference(input.to_string()))?;
+        .ok_or_else(|| SplayError::InvalidWorkspaceReference(input.to_string()))?;
     let (repository, workspace) = split;
 
     let repository = repository.trim();
     let workspace = workspace.trim();
 
     if repository.is_empty() || workspace.is_empty() {
-        return Err(SwarmError::InvalidWorkspaceReference(input.to_string()));
+        return Err(SplayError::InvalidWorkspaceReference(input.to_string()));
     }
 
     Ok(WorkspaceReference {
@@ -688,7 +688,7 @@ pub fn parse_workspace_reference(input: &str) -> Result<WorkspaceReference, Swar
     })
 }
 
-fn resolve_workspace_name(name: Option<&str>) -> Result<String, SwarmError> {
+fn resolve_workspace_name(name: Option<&str>) -> Result<String, SplayError> {
     let workspace_name = name.unwrap_or("workspace").trim();
 
     if workspace_name.is_empty()
@@ -697,7 +697,7 @@ fn resolve_workspace_name(name: Option<&str>) -> Result<String, SwarmError> {
         || workspace_name.contains(':')
         || workspace_name.contains(char::is_whitespace)
     {
-        return Err(SwarmError::InvalidWorkspace(workspace_name.to_string()));
+        return Err(SplayError::InvalidWorkspace(workspace_name.to_string()));
     }
 
     Ok(workspace_name.to_string())
@@ -708,7 +708,7 @@ fn build_worktree_add_args(
     workspace_path: &Path,
     workspace_name: &str,
     default_branch: &str,
-) -> Result<Vec<String>, SwarmError> {
+) -> Result<Vec<String>, SplayError> {
     let mut args = vec![
         format!("--git-dir={}", bare_repo_path.display()),
         "worktree".to_string(),
@@ -728,7 +728,7 @@ fn build_clone_worktree_add_args(
     workspace_path: &Path,
     workspace_name: &str,
     source_head: &str,
-) -> Result<Vec<String>, SwarmError> {
+) -> Result<Vec<String>, SplayError> {
     Ok(vec![
         format!("--git-dir={}", bare_repo_path.display()),
         "worktree".to_string(),
@@ -740,7 +740,7 @@ fn build_clone_worktree_add_args(
     ])
 }
 
-fn git_current_branch(path: &Path) -> Result<String, SwarmError> {
+fn git_current_branch(path: &Path) -> Result<String, SplayError> {
     let branch = run_git(Some(path), ["branch", "--show-current"])?;
     if !branch.is_empty() {
         return Ok(branch);
@@ -749,11 +749,11 @@ fn git_current_branch(path: &Path) -> Result<String, SwarmError> {
     run_git(Some(path), ["rev-parse", "--short", "HEAD"])
 }
 
-fn git_rev_parse(path: &Path, revision: &str) -> Result<String, SwarmError> {
+fn git_rev_parse(path: &Path, revision: &str) -> Result<String, SplayError> {
     run_git(Some(path), ["rev-parse", revision])
 }
 
-fn run_git<I, S>(cwd: Option<&Path>, args: I) -> Result<String, SwarmError>
+fn run_git<I, S>(cwd: Option<&Path>, args: I) -> Result<String, SplayError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -769,7 +769,7 @@ where
 
     let output = cmd.output()?;
     if !output.status.success() {
-        return Err(SwarmError::Git(render_git_failure(output)));
+        return Err(SplayError::Git(render_git_failure(output)));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -790,8 +790,8 @@ fn render_git_failure(output: std::process::Output) -> String {
     format!("exit status {}", output.status)
 }
 
-fn path_to_string(path: &Path) -> Result<&str, SwarmError> {
-    path.to_str().ok_or(SwarmError::PathResolution)
+fn path_to_string(path: &Path) -> Result<&str, SplayError> {
+    path.to_str().ok_or(SplayError::PathResolution)
 }
 
 fn unix_timestamp() -> i64 {
@@ -810,7 +810,7 @@ fn workspace_created_at(path: &Path) -> i64 {
         .unwrap_or_else(unix_timestamp)
 }
 
-pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), SwarmError> {
+pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), SplayError> {
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS workspaces (
@@ -846,7 +846,7 @@ pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), Swarm
             .await
             .map_err(|err| database_error(path, "migrate workspaces schema", err))?;
     } else if columns != ["name", "branch", "path", "created_at", "archived_at"] {
-        return Err(SwarmError::Io(std::io::Error::other(format!(
+        return Err(SplayError::Io(std::io::Error::other(format!(
             "unsupported workspaces schema columns: {}",
             columns.join(", ")
         ))));
@@ -898,7 +898,7 @@ async fn table_columns(
     conn: &Connection,
     table: &str,
     path: &Path,
-) -> Result<Vec<String>, SwarmError> {
+) -> Result<Vec<String>, SplayError> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
         .await
@@ -936,7 +936,7 @@ mod tests {
     #[test]
     fn default_branch_workspace_is_reset_to_origin_tip() {
         let bare_repo_path = create_bare_repo("main");
-        let workspace_path = PathBuf::from("/tmp/swarm-test-main");
+        let workspace_path = PathBuf::from("/tmp/splay-test-main");
 
         let args =
             build_worktree_add_args(&bare_repo_path, &workspace_path, "main", "main").unwrap();
@@ -958,7 +958,7 @@ mod tests {
     #[test]
     fn new_workspace_branches_from_origin_default_branch() {
         let bare_repo_path = create_bare_repo("main");
-        let workspace_path = PathBuf::from("/tmp/swarm-test-feature");
+        let workspace_path = PathBuf::from("/tmp/splay-test-feature");
 
         let args =
             build_worktree_add_args(&bare_repo_path, &workspace_path, "feature", "main").unwrap();
@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn orphan_workspace_branch_is_reset_to_origin_default_branch() {
         let bare_repo_path = create_bare_repo("main");
-        let workspace_path = PathBuf::from("/tmp/swarm-test-existing");
+        let workspace_path = PathBuf::from("/tmp/splay-test-existing");
         run_git(
             None,
             [
@@ -1012,7 +1012,7 @@ mod tests {
     #[test]
     fn cloned_workspace_branches_from_source_head() {
         let bare_repo_path = create_bare_repo("main");
-        let workspace_path = PathBuf::from("/tmp/swarm-test-clone");
+        let workspace_path = PathBuf::from("/tmp/splay-test-clone");
 
         let args = build_clone_worktree_add_args(
             &bare_repo_path,
@@ -1038,7 +1038,7 @@ mod tests {
 
     #[tokio::test]
     async fn migrate_repo_db_adds_archived_at_without_dropping_workspaces() {
-        let db_path = unique_temp_path("swarm-workspaces-db");
+        let db_path = unique_temp_path("splay-workspaces-db");
         let db = Builder::new_local(db_path.to_str().unwrap())
             .build()
             .await
@@ -1107,17 +1107,17 @@ mod tests {
     #[tokio::test]
     async fn mark_workspace_used_records_and_updates_last_use() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
-        let data_home = unique_temp_path("swarm-test-data-home");
+        let data_home = unique_temp_path("splay-test-data-home");
         fs::create_dir_all(&data_home).unwrap();
         let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
 
         let repos = RepositoryStore::open().await.unwrap();
-        let repo = repos.add("github/penberg/swarm", None).await.unwrap();
+        let repo = repos.add("github/penberg/splay", None).await.unwrap();
         assert!(repos.workspace_last_used(&repo).await.unwrap().is_empty());
 
-        repos.mark_workspace_used("swarm", "main").await.unwrap();
-        repos.mark_workspace_used("swarm", "main").await.unwrap();
-        repos.mark_workspace_used("swarm", "feature").await.unwrap();
+        repos.mark_workspace_used("splay", "main").await.unwrap();
+        repos.mark_workspace_used("splay", "main").await.unwrap();
+        repos.mark_workspace_used("splay", "feature").await.unwrap();
 
         let last_used = repos.workspace_last_used(&repo).await.unwrap();
         assert_eq!(last_used.len(), 2);
@@ -1128,13 +1128,13 @@ mod tests {
     #[tokio::test]
     async fn prune_removes_archived_row_when_worktree_is_missing() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
-        let data_home = unique_temp_path("swarm-test-data-home");
+        let data_home = unique_temp_path("splay-test-data-home");
         fs::create_dir_all(&data_home).unwrap();
         let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
 
         let result = async {
             let repos = RepositoryStore::open().await.unwrap();
-            let repo = repos.add("github/penberg/swarm", None).await.unwrap();
+            let repo = repos.add("github/penberg/splay", None).await.unwrap();
             let bare_repo_path = repos.bare_repo_path(&repo);
             fs::create_dir_all(repos.repo_dir(&repo)).unwrap();
             run_git(
@@ -1162,7 +1162,7 @@ mod tests {
             .unwrap();
 
             let store = WorkspaceStore::open().await.unwrap();
-            let report = store.prune("github/penberg/swarm").await.unwrap();
+            let report = store.prune("github/penberg/splay").await.unwrap();
             assert_eq!(report.pruned, vec!["archived".to_string()]);
             assert!(report.failed.is_empty());
 
@@ -1183,11 +1183,11 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
-        let data_home = unique_temp_path("swarm-test-data-home");
+        let data_home = unique_temp_path("splay-test-data-home");
         fs::create_dir_all(&data_home).unwrap();
         let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
 
-        let stuck_path = unique_temp_path("swarm-test-stuck-workspace");
+        let stuck_path = unique_temp_path("splay-test-stuck-workspace");
         fs::create_dir_all(stuck_path.join("subdir")).unwrap();
         // A read-only directory makes its entries undeletable, which is what
         // remove_dir_all runs into when a worktree holds files the user
@@ -1196,7 +1196,7 @@ mod tests {
 
         let result = async {
             let repos = RepositoryStore::open().await.unwrap();
-            let repo = repos.add("github/penberg/swarm", None).await.unwrap();
+            let repo = repos.add("github/penberg/splay", None).await.unwrap();
             let bare_repo_path = repos.bare_repo_path(&repo);
             fs::create_dir_all(repos.repo_dir(&repo)).unwrap();
             run_git(
@@ -1230,7 +1230,7 @@ mod tests {
             .unwrap();
 
             let store = WorkspaceStore::open().await.unwrap();
-            let report = store.prune("github/penberg/swarm").await.unwrap();
+            let report = store.prune("github/penberg/splay").await.unwrap();
             assert_eq!(report.pruned, vec!["gone".to_string()]);
             assert_eq!(report.failed.len(), 1);
             assert_eq!(report.failed[0].name, "stuck");
@@ -1255,7 +1255,7 @@ mod tests {
 
     #[tokio::test]
     async fn allocate_workspace_name_skips_archived_workspace_ids() {
-        let db_path = unique_temp_path("swarm-workspaces-db");
+        let db_path = unique_temp_path("splay-workspaces-db");
         let db = Builder::new_local(db_path.to_str().unwrap())
             .build()
             .await
@@ -1269,7 +1269,7 @@ mod tests {
         .await
         .unwrap();
 
-        let workspaces_dir = unique_temp_path("swarm-workspaces-dir");
+        let workspaces_dir = unique_temp_path("splay-workspaces-dir");
         fs::create_dir_all(&workspaces_dir).unwrap();
         assert_eq!(
             WorkspaceStore::allocate_workspace_name(&conn, &workspaces_dir, "main")
@@ -1282,10 +1282,10 @@ mod tests {
     #[tokio::test]
     async fn workspace_name_exists_treats_archived_ids_as_taken() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
-        let data_home = unique_temp_path("swarm-test-data-home");
+        let data_home = unique_temp_path("splay-test-data-home");
         fs::create_dir_all(&data_home).unwrap();
         let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
-        let db_path = unique_temp_path("swarm-workspaces-db");
+        let db_path = unique_temp_path("splay-workspaces-db");
         let db = Builder::new_local(db_path.to_str().unwrap())
             .build()
             .await
@@ -1299,7 +1299,7 @@ mod tests {
         .await
         .unwrap();
 
-        let workspaces_dir = unique_temp_path("swarm-workspaces-dir");
+        let workspaces_dir = unique_temp_path("splay-workspaces-dir");
         fs::create_dir_all(&workspaces_dir).unwrap();
         assert!(
             WorkspaceStore::workspace_name_exists(&conn, &workspaces_dir, "main")
@@ -1311,12 +1311,12 @@ mod tests {
     #[tokio::test]
     async fn list_reconciles_missing_workspace_rows_from_live_worktrees() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
-        let data_home = unique_temp_path("swarm-test-data-home");
+        let data_home = unique_temp_path("splay-test-data-home");
         fs::create_dir_all(&data_home).unwrap();
         let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
 
         let repos = RepositoryStore::open().await.unwrap();
-        let repo = repos.add("github/penberg/swarm", None).await.unwrap();
+        let repo = repos.add("github/penberg/splay", None).await.unwrap();
         let bare_repo_path = repos.bare_repo_path(&repo);
         fs::rename(create_bare_repo("main"), &bare_repo_path).unwrap();
 
@@ -1330,10 +1330,10 @@ mod tests {
         .unwrap();
 
         let store = WorkspaceStore::open().await.unwrap();
-        let workspaces = store.list("swarm").await.unwrap();
+        let workspaces = store.list("splay").await.unwrap();
 
         assert_eq!(workspaces.len(), 1);
-        assert_eq!(workspaces[0].repository, "github/penberg/swarm");
+        assert_eq!(workspaces[0].repository, "github/penberg/splay");
         assert_eq!(workspaces[0].name, "restored");
         assert_eq!(workspaces[0].branch, "restored");
         assert_eq!(workspaces[0].path, workspace_path);
@@ -1360,7 +1360,7 @@ mod tests {
     }
 
     fn create_bare_repo(default_branch: &str) -> PathBuf {
-        let repo_path = unique_temp_path("swarm-workspaces-test");
+        let repo_path = unique_temp_path("splay-workspaces-test");
         fs::create_dir_all(&repo_path).unwrap();
         run_git(
             None,
@@ -1384,10 +1384,10 @@ mod tests {
         .or_else(|_| {
             run_git_with_env(
                 [
-                    ("GIT_AUTHOR_NAME", "Swarm Tests"),
-                    ("GIT_AUTHOR_EMAIL", "swarm-tests@example.com"),
-                    ("GIT_COMMITTER_NAME", "Swarm Tests"),
-                    ("GIT_COMMITTER_EMAIL", "swarm-tests@example.com"),
+                    ("GIT_AUTHOR_NAME", "Splay Tests"),
+                    ("GIT_AUTHOR_EMAIL", "splay-tests@example.com"),
+                    ("GIT_COMMITTER_NAME", "Splay Tests"),
+                    ("GIT_COMMITTER_EMAIL", "splay-tests@example.com"),
                 ],
                 [
                     format!("--git-dir={}", repo_path.display()),

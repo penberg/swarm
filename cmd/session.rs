@@ -1,10 +1,10 @@
 use crate::{
-    SwarmError,
+    SplayError,
     opts::{SessionCommand, SessionSubcommand},
     sessions::{SessionStore, serve_runtime},
 };
 
-pub async fn run(cmd: SessionCommand) -> Result<(), SwarmError> {
+pub async fn run(cmd: SessionCommand) -> Result<(), SplayError> {
     match cmd.command {
         SessionSubcommand::Create { workspace, command } => {
             let store = SessionStore::open().await?;

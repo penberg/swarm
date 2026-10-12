@@ -1,8 +1,8 @@
-# Swarm Reference Manual
+# Splay Reference Manual
 
 ## Repositories
 
-A repository is the top-level codebase record in `swarm`.
+A repository is the top-level codebase record in `splay`.
 
 Each repository maps to one remote git repository hosted on a forge.
 
@@ -12,13 +12,13 @@ The canonical repository identifier is:
 host/owner/name
 ```
 
-Example: `github.com/penberg/swarm`
+Example: `github.com/penberg/splay`
 
-`swarm repo` commands:
-- register a repository with `swarm`
+`splay repo` commands:
+- register a repository with `splay`
 - sync a repository's local bare clone from the remote
-- remove a repository from `swarm`
-- list repositories known to `swarm`
+- remove a repository from `splay`
+- list repositories known to `splay`
 
 Repository commands do not create workspaces or sessions.
 
@@ -28,7 +28,7 @@ A workspace is a local checkout for a registered repository.
 
 Each workspace belongs to exactly one repository and is backed by a git worktree on disk.
 
-`swarm workspace` commands:
+`splay workspace` commands:
 - create a new local worktree for a repository
 - clone a workspace into a new local worktree
 - list workspaces for a repository
@@ -39,11 +39,11 @@ Each workspace belongs to exactly one repository and is backed by a git worktree
 
 A session is a command environment attached to one workspace.
 
-Sessions are the operational unit that `swarm` runs, attaches to, and eventually shows as terminal tabs in the TUI.
+Sessions are the operational unit that `splay` runs, attaches to, and eventually shows as terminal tabs in the TUI.
 
 Each session belongs to exactly one workspace.
 
-`swarm session` commands:
+`splay session` commands:
 - create a new session for a workspace
 - list sessions
 - inspect session metadata
@@ -52,23 +52,23 @@ Each session belongs to exactly one workspace.
 
 ## Prune
 
-`swarm prune` removes local state that is no longer useful.
+`splay prune` removes local state that is no longer useful.
 
-`swarm prune` commands:
+`splay prune` commands:
 - prune stopped, failed, or exited sessions
 
 ## On-Disk Format
 
-`swarm` stores persistent state in the XDG data directory:
+`splay` stores persistent state in the XDG data directory:
 
 ```text
-~/.local/share/swarm/
+~/.local/share/splay/
 ```
 
 Layout:
 
 ```text
-~/.local/share/swarm/
+~/.local/share/splay/
   index.db
   repos/
     <host>/
@@ -86,7 +86,7 @@ Layout:
 
 ### `index.db`
 
-Global repository index. Used by `swarm repo list`, `swarm repo add`, and `swarm repo remove`.
+Global repository index. Used by `splay repo list`, `splay repo add`, and `splay repo remove`.
 
 Stores one row per repository:
 - `host`
@@ -108,7 +108,7 @@ Also stores a `workspace_usage` table with one row per workspace selected in the
 Per-repository directory. Example:
 
 ```text
-~/.local/share/swarm/repos/github.com/penberg/swarm/
+~/.local/share/splay/repos/github.com/penberg/splay/
 ```
 
 Contains repository-specific state and worktree directories.
@@ -120,9 +120,9 @@ Repository metadata. Example:
 ```toml
 host = "github.com"
 owner = "penberg"
-name = "swarm"
-canonical = "github.com/penberg/swarm"
-alias = "swarm"
+name = "splay"
+canonical = "github.com/penberg/splay"
+alias = "splay"
 ```
 
 ### `repo.db`
@@ -138,7 +138,7 @@ Repository-local database. Stores:
 Git worktree checkout directories. Example:
 
 ```text
-~/.local/share/swarm/repos/github.com/penberg/swarm/workspaces/main/
+~/.local/share/splay/repos/github.com/penberg/splay/workspaces/main/
 ```
 
 The workspace name is the identifier within that repository.
@@ -148,7 +148,7 @@ The workspace name is the identifier within that repository.
 Per-session runtime state. Example:
 
 ```text
-~/.local/share/swarm/repos/github.com/penberg/swarm/sessions/01JSESSIONEXAMPLE/
+~/.local/share/splay/repos/github.com/penberg/splay/sessions/01JSESSIONEXAMPLE/
 ```
 
 This directory is intended to hold session-local files such as:
@@ -165,22 +165,36 @@ Sessions are stored under the repository shard because they are attached to work
 - Workspace paths derive from the workspace name.
 - Session paths derive from a session identifier.
 
+### Migrating from Swarm
+
+Splay was previously called Swarm and kept its state in `~/.local/share/swarm/`.
+The first time `splay` or `splayctl` opens its state and finds only the old
+directory, it:
+
+- moves `~/.local/share/swarm/` to `~/.local/share/splay/`,
+- rewrites the absolute workspace and session paths stored in each `repo.db`,
+- runs `git worktree repair` so worktrees and their bare clone point at each other again, and
+- leaves a `~/.local/share/swarm` symlink to the new directory.
+
+The migration refuses to run while sessions are still running from the old
+directory. Stop them first, then start Splay again.
+
 ## Command Line Reference
 
-### `swarm session`
+### `splay session`
 
 Manage workspace sessions.
 
 Future TUI terminal tabs should map to sessions, not directly to workspaces.
 
-### `swarm session create`
+### `splay session create`
 
 Create a session for a workspace.
 
 #### Usage
 
 ```text
-swarm session create <workspace> -- <command> [args...]
+splay session create <workspace> -- <command> [args...]
 ```
 
 #### Arguments
@@ -197,20 +211,20 @@ swarm session create <workspace> -- <command> [args...]
 #### Examples
 
 ```text
-swarm session create swarm/main -- bash
-swarm session create swarm/github-actions -- cargo test
+splay session create splay/main -- bash
+splay session create splay/github-actions -- cargo test
 ```
 
-### `swarm session list`
+### `splay session list`
 
 List sessions.
 
 #### Usage
 
 ```text
-swarm session list
-swarm session list <workspace>
-swarm session list --json
+splay session list
+splay session list <workspace>
+splay session list --json
 ```
 
 #### Arguments
@@ -223,17 +237,17 @@ swarm session list --json
 
 #### Behavior
 
-- Lists sessions known to local `swarm` state.
+- Lists sessions known to local `splay` state.
 - When `<workspace>` is provided, filters to that workspace.
 
-### `swarm session info`
+### `splay session info`
 
 Show metadata for one session.
 
 #### Usage
 
 ```text
-swarm session info <session>
+splay session info <session>
 ```
 
 #### Arguments
@@ -244,14 +258,14 @@ swarm session info <session>
 
 - Prints session metadata such as workspace, command, status, and timestamps.
 
-### `swarm session attach`
+### `splay session attach`
 
 Attach to an existing session.
 
 #### Usage
 
 ```text
-swarm session attach <session>
+splay session attach <session>
 ```
 
 #### Arguments
@@ -265,14 +279,14 @@ swarm session attach <session>
 - Press `Ctrl-]` to detach without terminating the session.
 - `Ctrl-D` is passed through to the attached process and may cause shells to exit.
 
-### `swarm session stop`
+### `splay session stop`
 
 Stop a running session.
 
 #### Usage
 
 ```text
-swarm session stop <session>
+splay session stop <session>
 ```
 
 #### Arguments
@@ -284,23 +298,23 @@ swarm session stop <session>
 - Requests session termination.
 - Marks the session as stopped in local state.
 
-### `swarm prune`
+### `splay prune`
 
 Prune local state.
 
-### `swarm prune sessions`
+### `splay prune sessions`
 
 Prune stopped, failed, or exited sessions.
 
 #### Usage
 
 ```text
-swarm prune sessions
+splay prune sessions
 ```
 
 #### Behavior
 
-- Scans all repositories known to local `swarm` state.
+- Scans all repositories known to local `splay` state.
 - Removes sessions whose status is `stopped`, `failed`, or `exited`.
 - Leaves `starting` and `running` sessions untouched.
 
@@ -310,19 +324,19 @@ swarm prune sessions
 Pruned 2 sessions
 ```
 
-### `swarm workspace`
+### `splay workspace`
 
-Manage repository workspaces. Alias: `swarm ws`.
+Manage repository workspaces. Alias: `splay ws`.
 
-### `swarm workspace create`
+### `splay workspace create`
 
 Create a workspace for a repository.
 
 #### Usage
 
 ```text
-swarm workspace create <repository> [name]
-swarm ws create <repository> [name]
+splay workspace create <repository> [name]
+splay ws create <repository> [name]
 ```
 
 #### Arguments
@@ -341,27 +355,27 @@ swarm ws create <repository> [name]
 #### Examples
 
 ```text
-swarm workspace create swarm
-swarm workspace create swarm feature-x
-swarm ws create github.com/penberg/swarm review-docs
+splay workspace create splay
+splay workspace create splay feature-x
+splay ws create github.com/penberg/splay review-docs
 ```
 
 #### Expected Output
 
 ```text
-Created workspace main for swarm
+Created workspace main for splay
 Created session 01JSESSIONEXAMPLE
 ```
 
-### `swarm workspace clone`
+### `splay workspace clone`
 
 Clone a workspace into a new workspace.
 
 #### Usage
 
 ```text
-swarm workspace clone <workspace> <name>
-swarm ws clone <workspace> <name>
+splay workspace clone <workspace> <name>
+splay ws clone <workspace> <name>
 ```
 
 #### Arguments
@@ -380,27 +394,27 @@ swarm ws clone <workspace> <name>
 #### Examples
 
 ```text
-swarm workspace clone swarm:main feature-x
-swarm ws clone swarm/bugfix bugfix-copy
+splay workspace clone splay:main feature-x
+splay ws clone splay/bugfix bugfix-copy
 ```
 
 #### Expected Output
 
 ```text
-Cloned workspace swarm:main to feature-x for swarm
+Cloned workspace splay:main to feature-x for splay
 Created session 01JSESSIONEXAMPLE
 ```
 
-### `swarm workspace list`
+### `splay workspace list`
 
 List workspaces for a repository.
 
 #### Usage
 
 ```text
-swarm workspace list <repository>
-swarm ws list <repository>
-swarm workspace list <repository> --json
+splay workspace list <repository>
+splay ws list <repository>
+splay workspace list <repository> --json
 ```
 
 #### Arguments
@@ -419,19 +433,19 @@ swarm workspace list <repository> --json
 #### Examples
 
 ```text
-swarm workspace list swarm
-swarm ws list github.com/penberg/swarm --json
+splay workspace list splay
+splay ws list github.com/penberg/splay --json
 ```
 
-### `swarm workspace info`
+### `splay workspace info`
 
 Show metadata for one workspace.
 
 #### Usage
 
 ```text
-swarm workspace info <workspace>
-swarm ws info <workspace>
+splay workspace info <workspace>
+splay ws info <workspace>
 ```
 
 #### Arguments
@@ -442,15 +456,15 @@ swarm ws info <workspace>
 
 - Prints workspace metadata: repository, name, path, creation time.
 
-### `swarm workspace remove`
+### `splay workspace remove`
 
 Remove a workspace.
 
 #### Usage
 
 ```text
-swarm workspace remove <workspace>
-swarm ws remove <workspace>
+splay workspace remove <workspace>
+splay ws remove <workspace>
 ```
 
 #### Arguments
@@ -463,14 +477,14 @@ swarm ws remove <workspace>
 - Removes the corresponding git worktree.
 - Removes the workspace directory on disk.
 
-### `swarm repo add`
+### `splay repo add`
 
-Register a repository with `swarm`.
+Register a repository with `splay`.
 
 #### Usage
 
 ```text
-swarm repo add <host/owner/name|remote-url> [--alias <name>]
+splay repo add <host/owner/name|remote-url> [--alias <name>]
 ```
 
 #### Arguments
@@ -479,7 +493,7 @@ swarm repo add <host/owner/name|remote-url> [--alias <name>]
 
 #### Options
 
-- `--alias <name>`: Optional local shorthand for the repository. If omitted, `swarm` uses the repository name as the default alias.
+- `--alias <name>`: Optional local shorthand for the repository. If omitted, `splay` uses the repository name as the default alias.
 
 #### Behavior
 
@@ -492,26 +506,26 @@ swarm repo add <host/owner/name|remote-url> [--alias <name>]
 #### Examples
 
 ```text
-swarm repo add github.com/penberg/swarm
-swarm repo add github.com/penberg/other --alias other
-swarm repo add git@github.com:penberg/private-repo.git --alias private
+splay repo add github.com/penberg/splay
+splay repo add github.com/penberg/other --alias other
+splay repo add git@github.com:penberg/private-repo.git --alias private
 ```
 
 #### Expected Output
 
 ```text
-Added repo swarm
+Added repo splay
 ```
 
-### `swarm repo list`
+### `splay repo list`
 
-List repositories registered with `swarm`.
+List repositories registered with `splay`.
 
 #### Usage
 
 ```text
-swarm repo list
-swarm repo list --json
+splay repo list
+splay repo list --json
 ```
 
 #### Options
@@ -526,25 +540,25 @@ swarm repo list --json
 #### Examples
 
 ```text
-swarm repo list
-swarm repo list --json
+splay repo list
+splay repo list --json
 ```
 
 #### Expected Output
 
 ```text
 ALIAS            REPOSITORY
-swarm            github.com/penberg/swarm
+splay            github.com/penberg/splay
 ```
 
-### `swarm repo sync`
+### `splay repo sync`
 
 Sync a registered repository from its remote.
 
 #### Usage
 
 ```text
-swarm repo sync <repository>
+splay repo sync <repository>
 ```
 
 #### Arguments
@@ -560,24 +574,24 @@ swarm repo sync <repository>
 #### Examples
 
 ```text
-swarm repo sync swarm
-swarm repo sync github.com/penberg/swarm
+splay repo sync splay
+splay repo sync github.com/penberg/splay
 ```
 
 #### Expected Output
 
 ```text
-Synced repo swarm
+Synced repo splay
 ```
 
-### `swarm repo remove`
+### `splay repo remove`
 
-Remove a repository from `swarm`.
+Remove a repository from `splay`.
 
 #### Usage
 
 ```text
-swarm repo remove <repository>
+splay repo remove <repository>
 ```
 
 #### Arguments
@@ -593,14 +607,14 @@ swarm repo remove <repository>
 #### Examples
 
 ```text
-swarm repo remove swarm
-swarm repo remove github.com/penberg/swarm
+splay repo remove splay
+splay repo remove github.com/penberg/splay
 ```
 
 #### Expected Output
 
 ```text
-Removed repo swarm
+Removed repo splay
 ```
 
 ## Exit Codes

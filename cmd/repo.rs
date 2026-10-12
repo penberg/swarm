@@ -1,10 +1,10 @@
 use crate::{
-    SwarmError,
+    SplayError,
     opts::{RepoCommand, RepoSubcommand},
     repos::RepositoryStore,
 };
 
-pub async fn run(cmd: RepoCommand) -> Result<(), SwarmError> {
+pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
     let store = RepositoryStore::open().await?;
 
     match cmd.command {

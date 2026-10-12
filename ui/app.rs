@@ -7,16 +7,16 @@ use gtk::{
     glib,
     prelude::*,
 };
+use splay::{
+    SplayError,
+    forges::github::{self, PullRequestStatus, PullRequestStatusState},
+};
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     path::Path,
     rc::Rc,
     time::{Duration, Instant},
-};
-use swarm::{
-    SwarmError,
-    forges::github::{self, PullRequestStatus, PullRequestStatusState},
 };
 
 use crate::{
@@ -30,7 +30,7 @@ use crate::{
     workspace_panel::DetailWidgets,
 };
 
-const APP_ID: &str = "com.penberg.swarm.ui";
+const APP_ID: &str = "com.penberg.splay.ui";
 const MAX_PENDING_PR_LOOKUPS: usize = 2;
 const SELECTED_PR_STATUS_TTL: Duration = Duration::from_secs(5);
 const PENDING_PR_STATUS_TTL: Duration = Duration::from_secs(15);
@@ -527,7 +527,7 @@ fn build_ui(app: &Application) {
 
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("swarm")
+        .title("splay")
         .default_width(1480)
         .default_height(920)
         .build();
@@ -2318,7 +2318,7 @@ fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, b
                 .remove(&removed_workspace_ref);
             button.set_sensitive(true);
             match result {
-                Ok(_) | Err(SwarmError::WorkspaceNotFound(_)) => {
+                Ok(_) | Err(SplayError::WorkspaceNotFound(_)) => {
                     // Drop the cached terminals of the removed sessions, otherwise their
                     // widgets stay alive and keep polling a socket that is already gone.
                     if let Some(detail_widgets) = state.detail_widgets.borrow().as_ref() {

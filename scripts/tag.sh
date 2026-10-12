@@ -60,5 +60,5 @@ cargo check
 cargo dist plan --allow-dirty
 
 git add Cargo.toml Cargo.lock
-git commit -m "Swarm $VERSION"
-git tag -a "$TAG" -m "Swarm $VERSION"
+git commit -m "Splay $VERSION"
+git tag -a "$TAG" -m "Splay $VERSION"

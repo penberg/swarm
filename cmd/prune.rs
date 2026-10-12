@@ -1,11 +1,11 @@
 use crate::{
-    SwarmError,
+    SplayError,
     opts::{PruneCommand, PruneSubcommand},
     prune::PruneStore,
     workspaces::PruneReport,
 };
 
-pub async fn run(cmd: PruneCommand) -> Result<(), SwarmError> {
+pub async fn run(cmd: PruneCommand) -> Result<(), SplayError> {
     let store = PruneStore::open().await?;
 
     match cmd.command {
@@ -28,7 +28,7 @@ pub async fn run(cmd: PruneCommand) -> Result<(), SwarmError> {
     Ok(())
 }
 
-fn report_workspaces(report: &PruneReport) -> Result<(), SwarmError> {
+fn report_workspaces(report: &PruneReport) -> Result<(), SplayError> {
     println!("Pruned {} archived workspaces", report.pruned.len());
 
     if report.failed.is_empty() {
@@ -43,7 +43,7 @@ fn report_workspaces(report: &PruneReport) -> Result<(), SwarmError> {
         );
     }
     eprintln!(
-        "note: remove the directories listed above manually, then run `swarmctl prune` again"
+        "note: remove the directories listed above manually, then run `splayctl prune` again"
     );
-    Err(SwarmError::PruneIncomplete(report.failed.len()))
+    Err(SplayError::PruneIncomplete(report.failed.len()))
 }

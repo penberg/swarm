@@ -1,5 +1,6 @@
 pub mod cmd;
 pub mod forges;
+mod legacy;
 pub mod opts;
 pub mod prune;
 pub mod repos;
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum SwarmError {
+pub enum SplayError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 
@@ -68,12 +69,17 @@ pub enum SwarmError {
     #[error("failed to prune {0} workspace(s)")]
     PruneIncomplete(usize),
 
-    #[error("failed to resolve swarm data directory")]
+    #[error("failed to resolve splay data directory")]
     PathResolution,
+
+    #[error(
+        "cannot move `{path}` to the Splay data directory while {sessions} session(s) still run there; stop them and try again"
+    )]
+    LegacyDataDirInUse { path: PathBuf, sessions: usize },
 }
 
-pub fn database_error(path: &Path, operation: &str, source: turso::Error) -> SwarmError {
-    SwarmError::Database {
+pub fn database_error(path: &Path, operation: &str, source: turso::Error) -> SplayError {
+    SplayError::Database {
         path: path.to_path_buf(),
         operation: operation.to_string(),
         source,

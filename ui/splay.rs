@@ -1,5 +1,5 @@
 use clap::Parser;
-use swarm::{
+use splay::{
     cmd,
     opts::{Command, Opts},
 };

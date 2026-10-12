@@ -1,14 +1,14 @@
+use splay::{
+    SplayError,
+    repos::{Repository, RepositoryStore},
+    sessions::{SessionStore, default_session_command},
+    workspaces::{Workspace, WorkspaceStore},
+};
 use std::{
     fs, io,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
-};
-use swarm::{
-    SwarmError,
-    repos::{Repository, RepositoryStore},
-    sessions::{SessionStore, default_session_command},
-    workspaces::{Workspace, WorkspaceStore},
 };
 
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ pub struct SessionEntry {
 /// How long a repository stays in the main sidebar list after its last use.
 const RECENTLY_USED_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
+pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
@@ -89,7 +89,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
                 })
                 .collect::<Vec<_>>();
 
-            Ok::<_, SwarmError>(WorkspaceEntry {
+            Ok::<_, SplayError>(WorkspaceEntry {
                 recently_used,
                 ..map_workspace(&repo_canonical, workspace, sessions)
             })
@@ -135,7 +135,7 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
 pub async fn create_workspace(
     repository: String,
     name: Option<String>,
-) -> Result<WorkspaceEntry, SwarmError> {
+) -> Result<WorkspaceEntry, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
@@ -143,7 +143,7 @@ pub async fn create_workspace(
     let repo = repo_store
         .resolve_repository(&repository)
         .await?
-        .ok_or_else(|| SwarmError::RepositoryNotFound(repository.clone()))?;
+        .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
     let workspace = workspace_store.create(&repository, name.as_deref()).await?;
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
     if let Err(err) = session_store
@@ -172,12 +172,12 @@ pub async fn create_workspace(
 pub async fn add_repository(
     repository: String,
     alias: Option<String>,
-) -> Result<Repository, SwarmError> {
+) -> Result<Repository, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store.add(&repository, alias.as_deref()).await
 }
 
-pub async fn sync_repository(repository: String) -> Result<(), SwarmError> {
+pub async fn sync_repository(repository: String) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store.sync(&repository).await?;
     Ok(())
@@ -186,7 +186,7 @@ pub async fn sync_repository(repository: String) -> Result<(), SwarmError> {
 pub async fn set_repository_collapsed(
     repository: String,
     collapsed: bool,
-) -> Result<(), SwarmError> {
+) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
     if collapsed {
         repo_store.collapse(&repository).await?;
@@ -196,12 +196,12 @@ pub async fn set_repository_collapsed(
     Ok(())
 }
 
-pub async fn set_all_repositories_collapsed(collapsed: bool) -> Result<(), SwarmError> {
+pub async fn set_all_repositories_collapsed(collapsed: bool) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store.set_all_collapsed(collapsed).await
 }
 
-pub async fn mark_workspace_used(repository: String, workspace: String) -> Result<(), SwarmError> {
+pub async fn mark_workspace_used(repository: String, workspace: String) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store
         .mark_workspace_used(&repository, &workspace)
@@ -211,7 +211,7 @@ pub async fn mark_workspace_used(repository: String, workspace: String) -> Resul
 pub async fn rename_workspace(
     workspace_ref: String,
     name: String,
-) -> Result<WorkspaceEntry, SwarmError> {
+) -> Result<WorkspaceEntry, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
@@ -219,7 +219,7 @@ pub async fn rename_workspace(
     let repo = repo_store
         .resolve_repository(&workspace.repository)
         .await?
-        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+        .ok_or_else(|| SplayError::RepositoryNotFound(workspace.repository.clone()))?;
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
     let sessions = session_store
         .list(Some(&workspace_ref))
@@ -241,7 +241,7 @@ pub async fn rename_workspace(
 pub async fn clone_workspace(
     workspace_ref: String,
     name: String,
-) -> Result<WorkspaceEntry, SwarmError> {
+) -> Result<WorkspaceEntry, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
@@ -249,7 +249,7 @@ pub async fn clone_workspace(
     let repo = repo_store
         .resolve_repository(&workspace.repository)
         .await?
-        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+        .ok_or_else(|| SplayError::RepositoryNotFound(workspace.repository.clone()))?;
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
     if let Err(err) = session_store
         .create(&workspace_ref, &default_session_command())
@@ -274,7 +274,7 @@ pub async fn clone_workspace(
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
 }
 
-pub async fn remove_workspace(workspace_ref: String) -> Result<WorkspaceEntry, SwarmError> {
+pub async fn remove_workspace(workspace_ref: String) -> Result<WorkspaceEntry, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let session_store = SessionStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
@@ -289,12 +289,12 @@ pub async fn remove_workspace(workspace_ref: String) -> Result<WorkspaceEntry, S
     let repo = repo_store
         .resolve_repository(&workspace.repository)
         .await?
-        .ok_or_else(|| SwarmError::RepositoryNotFound(workspace.repository.clone()))?;
+        .ok_or_else(|| SplayError::RepositoryNotFound(workspace.repository.clone()))?;
 
     Ok(map_workspace(&repo.canonical(), workspace, Vec::new()))
 }
 
-pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, SwarmError> {
+pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, SplayError> {
     let session_store = SessionStore::open().await?;
     let session = session_store
         .create(&workspace_ref, &default_session_command())
@@ -310,7 +310,7 @@ pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, Swarm
     })
 }
 
-pub async fn close_session(session_id: String) -> Result<SessionEntry, SwarmError> {
+pub async fn close_session(session_id: String) -> Result<SessionEntry, SplayError> {
     let session_store = SessionStore::open().await?;
     session_store.stop(&session_id).await?;
     let session = session_store.remove(&session_id).await?;
@@ -325,7 +325,7 @@ pub async fn close_session(session_id: String) -> Result<SessionEntry, SwarmErro
     })
 }
 
-pub fn current_workspace_branch(path: &str) -> Result<String, SwarmError> {
+pub fn current_workspace_branch(path: &str) -> Result<String, SplayError> {
     let path = Path::new(path);
     let branch = run_git(path, ["branch", "--show-current"])?;
     if !branch.is_empty() {
@@ -338,11 +338,11 @@ pub fn current_workspace_branch(path: &str) -> Result<String, SwarmError> {
 /// Resolves the workspace's HEAD commit by reading git's files directly, so
 /// callers on the GTK main thread never pay for a subprocess. Handles detached
 /// HEAD, loose refs, packed refs, and linked worktrees (`commondir`).
-pub fn read_workspace_head(path: &str) -> Result<String, SwarmError> {
+pub fn read_workspace_head(path: &str) -> Result<String, SplayError> {
     let head_path = workspace_head_path(path)?;
     let git_dir = head_path
         .parent()
-        .ok_or_else(|| SwarmError::Git(format!("no git dir for {path}")))?;
+        .ok_or_else(|| SplayError::Git(format!("no git dir for {path}")))?;
     let head = fs::read_to_string(&head_path)?;
     let head = head.trim();
     let Some(ref_name) = head.strip_prefix("ref: ") else {
@@ -369,7 +369,7 @@ pub fn read_workspace_head(path: &str) -> Result<String, SwarmError> {
 
     let packed = fs::read_to_string(common_dir.join("packed-refs"))?;
     packed_ref_target(&packed, ref_name)
-        .ok_or_else(|| SwarmError::Git(format!("unresolved ref {ref_name} for {path}")))
+        .ok_or_else(|| SplayError::Git(format!("unresolved ref {ref_name} for {path}")))
 }
 
 fn packed_ref_target(packed_refs: &str, ref_name: &str) -> Option<String> {
@@ -386,7 +386,7 @@ fn packed_ref_target(packed_refs: &str, ref_name: &str) -> Option<String> {
     None
 }
 
-pub fn workspace_head_path(path: &str) -> Result<PathBuf, SwarmError> {
+pub fn workspace_head_path(path: &str) -> Result<PathBuf, SplayError> {
     Ok(workspace_git_dir(Path::new(path))?.join("HEAD"))
 }
 
@@ -402,7 +402,7 @@ fn workspace_last_commit(workspace_path: &Path) -> Option<i64> {
     Some(elapsed.as_secs() as i64)
 }
 
-fn workspace_git_dir(workspace_path: &Path) -> Result<PathBuf, SwarmError> {
+fn workspace_git_dir(workspace_path: &Path) -> Result<PathBuf, SplayError> {
     let git_path = workspace_path.join(".git");
     if git_path.is_dir() {
         return Ok(git_path);
@@ -628,13 +628,13 @@ fn is_interpreter(name: &str) -> bool {
     )
 }
 
-fn resolve_gitdir_file(git_path: &Path, workspace_path: &Path) -> Result<PathBuf, SwarmError> {
+fn resolve_gitdir_file(git_path: &Path, workspace_path: &Path) -> Result<PathBuf, SplayError> {
     let contents = fs::read_to_string(git_path)?;
     let git_dir = contents
         .strip_prefix("gitdir: ")
         .map(str::trim)
         .filter(|path| !path.is_empty())
-        .ok_or_else(|| SwarmError::Git(format!("invalid gitdir file at {}", git_path.display())))?;
+        .ok_or_else(|| SplayError::Git(format!("invalid gitdir file at {}", git_path.display())))?;
 
     let git_dir = Path::new(git_dir);
     if git_dir.is_absolute() {
@@ -644,7 +644,7 @@ fn resolve_gitdir_file(git_path: &Path, workspace_path: &Path) -> Result<PathBuf
     Ok(workspace_path.join(git_dir))
 }
 
-fn run_git<I, S>(cwd: &Path, args: I) -> Result<String, SwarmError>
+fn run_git<I, S>(cwd: &Path, args: I) -> Result<String, SplayError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -658,7 +658,7 @@ where
 
     let output = cmd.output()?;
     if !output.status.success() {
-        return Err(SwarmError::Git(render_git_failure(output)));
+        return Err(SplayError::Git(render_git_failure(output)));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
