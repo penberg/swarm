@@ -5,10 +5,6 @@
 <h1 align="center">Splay</h1>
 <p align="center"><em>Fan out your agents.</em></p>
 
-<p align="center">
-  <img src=".github/assets/hero.png" width="600" alt="Splay">
-</p>
-
 Splay is a workspace manager for parallel coding agent development, similar to [cmux](https://github.com/manaflow-ai/cmux), [Superset](https://github.com/superset-sh/superset), and [Conductor](https://www.conductor.build/). Register git repositories, spin up isolated worktrees, and run persistent terminal sessions inside them from a native GTK desktop app or the CLI.
 
 Splay was previously called Swarm. Read the [announcement blog post](https://penberg.org/blog/swarm.html) for more background.
@@ -29,11 +25,17 @@ Splay runs on Linux. Install the latest prebuilt release with:
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/splay-sh/splay/releases/latest/download/splay-installer.sh | sh
 ```
 
-Then start the GUI with:
+## Getting started
+
+Start the GUI with:
 
 ```console
 splay
 ```
+
+<p align="center">
+  <img src=".github/assets/hero.png" width="760" alt="Splay">
+</p>
 
 Or drive Splay from the command line with `splayctl`:
 
