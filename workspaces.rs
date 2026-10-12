@@ -163,7 +163,7 @@ impl WorkspaceStore {
                 "SELECT name, branch, path, created_at, archived_at
                  FROM workspaces
                  WHERE archived_at IS NULL
-                 ORDER BY created_at, name",
+                 ORDER BY created_at DESC, name",
             )
             .await?;
         let mut rows = stmt.query(()).await?;
@@ -1102,6 +1102,27 @@ mod tests {
         assert_eq!(row.get::<String>(2).unwrap(), "/tmp/workspaces/main");
         assert_eq!(row.get::<i64>(3).unwrap(), 123);
         assert_eq!(row.get::<Option<i64>>(4).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn mark_workspace_used_records_and_updates_last_use() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let data_home = unique_temp_path("swarm-test-data-home");
+        fs::create_dir_all(&data_home).unwrap();
+        let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
+
+        let repos = RepositoryStore::open().await.unwrap();
+        let repo = repos.add("github/penberg/swarm", None).await.unwrap();
+        assert!(repos.workspace_last_used(&repo).await.unwrap().is_empty());
+
+        repos.mark_workspace_used("swarm", "main").await.unwrap();
+        repos.mark_workspace_used("swarm", "main").await.unwrap();
+        repos.mark_workspace_used("swarm", "feature").await.unwrap();
+
+        let last_used = repos.workspace_last_used(&repo).await.unwrap();
+        assert_eq!(last_used.len(), 2);
+        assert!(last_used.contains_key("main"));
+        assert!(last_used.contains_key("feature"));
     }
 
     #[tokio::test]

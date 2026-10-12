@@ -19,8 +19,9 @@ use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 use crate::{
     data::{
         WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, create_workspace,
-        current_workspace_branch, load_workspace_groups, read_workspace_head, remove_workspace,
-        rename_workspace, set_repository_collapsed, sync_repository, workspace_head_path,
+        current_workspace_branch, load_workspace_groups, mark_workspace_used, read_workspace_head,
+        remove_workspace, rename_workspace, set_all_repositories_collapsed,
+        set_repository_collapsed, sync_repository, workspace_head_path,
     },
     exec,
     workspace_panel::DetailWidgets,
@@ -183,6 +184,28 @@ window {
 .repo-sync:disabled {
   color: #a9d8ff;
   opacity: 1;
+}
+
+.sidebar-more {
+  min-height: 24px;
+  margin-top: 14px;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: #6f7887;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sidebar-more-workspaces {
+  margin-top: 2px;
+  margin-left: 4px;
+}
+
+.sidebar-more:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: #e7f3ff;
 }
 
 .repo-header {
@@ -521,12 +544,15 @@ fn build_ui(app: &Application) {
         sidebar_widgets: RefCell::new(None),
         detail_widgets: RefCell::new(None),
         workspace_groups: RefCell::new(Vec::new()),
+        show_more_repositories: Cell::new(false),
+        show_more_workspaces: RefCell::new(HashSet::new()),
         selected_workspace: RefCell::new(None),
         editing_workspace: RefCell::new(None),
         selected_session: RefCell::new(None),
         selected_sessions: RefCell::new(HashMap::new()),
         repository_form: RefCell::new(RepositoryFormState::default()),
         branch_monitors: RefCell::new(Vec::new()),
+        pr_indicators: RefCell::new(HashMap::new()),
         syncing_repositories: RefCell::new(HashSet::new()),
         pr_statuses: RefCell::new(HashMap::new()),
         pending_pr_lookups: RefCell::new(HashSet::new()),
@@ -560,12 +586,16 @@ pub struct AppState {
     sidebar_widgets: RefCell<Option<SidebarWidgets>>,
     pub detail_widgets: RefCell<Option<DetailWidgets>>,
     pub workspace_groups: RefCell<Vec<WorkspaceGroup>>,
+    show_more_repositories: Cell<bool>,
+    /// Repositories whose folded workspaces are currently shown.
+    show_more_workspaces: RefCell<HashSet<String>>,
     pub selected_workspace: RefCell<Option<String>>,
     editing_workspace: RefCell<Option<String>>,
     pub selected_session: RefCell<Option<String>>,
     selected_sessions: RefCell<HashMap<String, String>>,
     repository_form: RefCell<RepositoryFormState>,
     branch_monitors: RefCell<Vec<FileMonitor>>,
+    pr_indicators: RefCell<HashMap<String, GtkBox>>,
     syncing_repositories: RefCell<HashSet<String>>,
     pr_statuses: RefCell<HashMap<String, CachedPrStatus>>,
     pending_pr_lookups: RefCell<HashSet<String>>,
@@ -580,6 +610,8 @@ pub struct AppState {
 struct SidebarWidgets {
     container: GtkBox,
     add_repository_button: Button,
+    collapse_all_button: Button,
+    collapse_all_icon: Image,
     repository_form: RepositoryFormWidgets,
     scroller: ScrolledWindow,
 }
@@ -685,8 +717,7 @@ fn render_ui(
 ) {
     let selected_workspace = preferred_workspace
         .or_else(|| state.selected_workspace.borrow().clone())
-        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref))
-        .or_else(|| first_workspace(groups));
+        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref));
 
     let detail_widgets = state
         .detail_widgets
@@ -756,8 +787,7 @@ fn render_sidebar_only(state: &Rc<AppState>) {
         .selected_workspace
         .borrow()
         .clone()
-        .and_then(|workspace_ref| find_workspace_by_ref(&groups, &workspace_ref))
-        .or_else(|| first_workspace(&groups));
+        .and_then(|workspace_ref| find_workspace_by_ref(&groups, &workspace_ref));
     let detail_widgets = state
         .detail_widgets
         .borrow()
@@ -974,7 +1004,7 @@ fn apply_workspace_pr_update(
     let selected_workspace_changed = selected_workspace.as_deref() == Some(workspace_ref.as_str());
     state.pending_pr_lookups.borrow_mut().remove(&workspace_ref);
     state.pr_statuses.borrow_mut().insert(
-        workspace_ref,
+        workspace_ref.clone(),
         CachedPrStatus {
             state: status
                 .map(WorkspacePrState::Ready)
@@ -984,12 +1014,17 @@ fn apply_workspace_pr_update(
         },
     );
 
+    // Update the sidebar indicator in place. Rebuilding the whole sidebar for
+    // every lookup makes it flicker, since lookups complete continuously.
+    let indicator = state.pr_indicators.borrow().get(&workspace_ref).cloned();
+    if let Some(indicator) = indicator {
+        apply_workspace_status_indicator(state, &indicator, &workspace_ref);
+    }
+
     if selected_workspace_changed {
         if let Some(selected_workspace) = selected_workspace.as_deref() {
             render_selected_workspace_detail(state, selected_workspace, None);
         }
-    } else if !state.repository_form.borrow().expanded {
-        render_sidebar_only(state);
     }
 }
 
@@ -1110,6 +1145,25 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     }
     toolbar.append(&add_repository_button);
 
+    let toolbar_spacer = GtkBox::new(Orientation::Horizontal, 0);
+    toolbar_spacer.set_hexpand(true);
+    toolbar.append(&toolbar_spacer);
+
+    let collapse_all_button = Button::new();
+    collapse_all_button.set_valign(Align::Center);
+    collapse_all_button.add_css_class("repo-toggle");
+    let collapse_all_icon = Image::from_icon_name("pan-down-symbolic");
+    collapse_all_icon.set_pixel_size(14);
+    collapse_all_button.set_child(Some(&collapse_all_icon));
+    {
+        let state = state.clone();
+        collapse_all_button.connect_clicked(move |_| {
+            let any_expanded = current_groups(&state).iter().any(|group| !group.collapsed);
+            set_all_repos_collapsed_and_refresh(&state, any_expanded);
+        });
+    }
+    toolbar.append(&collapse_all_button);
+
     let repository_form = build_repository_form_widgets(state);
     let list_host = GtkBox::new(Orientation::Vertical, 0);
     list_host.set_hexpand(true);
@@ -1131,9 +1185,39 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     SidebarWidgets {
         container,
         add_repository_button,
+        collapse_all_button,
+        collapse_all_icon,
         repository_form,
         scroller,
     }
+}
+
+fn sync_collapse_all_button(state: &Rc<AppState>, groups: &[WorkspaceGroup]) {
+    let sidebar_widgets = state
+        .sidebar_widgets
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("sidebar widgets initialized");
+    let any_expanded = groups.iter().any(|group| !group.collapsed);
+
+    sidebar_widgets
+        .collapse_all_button
+        .set_visible(!groups.is_empty());
+    sidebar_widgets
+        .collapse_all_button
+        .set_tooltip_text(Some(if any_expanded {
+            "Collapse all repositories"
+        } else {
+            "Expand all repositories"
+        }));
+    sidebar_widgets
+        .collapse_all_icon
+        .set_icon_name(Some(if any_expanded {
+            "pan-down-symbolic"
+        } else {
+            "pan-end-symbolic"
+        }));
 }
 
 fn render_sidebar_content(
@@ -1143,9 +1227,11 @@ fn render_sidebar_content(
     selected_workspace: Option<WorkspaceEntry>,
 ) {
     clear_branch_monitors(state);
+    state.pr_indicators.borrow_mut().clear();
 
     let groups_empty = groups.is_empty();
     sync_repository_form_widgets(state, groups_empty);
+    sync_collapse_all_button(state, groups);
     let has_editing_workspace = state.editing_workspace.borrow().is_some();
 
     let list = ListBox::new();
@@ -1154,7 +1240,27 @@ fn render_sidebar_content(
 
     let rows = Rc::new(RefCell::new(Vec::<WorkspaceRow>::new()));
 
-    for group in groups {
+    let show_more_repositories = state.show_more_repositories.get();
+    let (entries, more_repositories) =
+        fold_entries(groups, |group| group.recently_used, show_more_repositories);
+
+    for entry in entries {
+        let Some(group) = entry else {
+            let text = if show_more_repositories {
+                "Show fewer repositories".to_string()
+            } else if more_repositories == 1 {
+                "1 more repository".to_string()
+            } else {
+                format!("{more_repositories} more repositories")
+            };
+            let state = state.clone();
+            let more_row = build_more_row(&text, show_more_repositories, move || {
+                state.show_more_repositories.set(!show_more_repositories);
+                schedule_render_sidebar_only(&state);
+            });
+            sidebar_append_static_row(&list, &more_row);
+            continue;
+        };
         let is_syncing = state
             .syncing_repositories
             .borrow()
@@ -1170,7 +1276,43 @@ fn render_sidebar_content(
         sidebar_append_static_row(&list, &repo_row);
 
         if !group.collapsed {
-            for workspace in &group.workspaces {
+            let show_more_workspaces = state
+                .show_more_workspaces
+                .borrow()
+                .contains(&group.repo_canonical);
+            let (entries, more_workspaces) = fold_entries(
+                &group.workspaces,
+                |workspace| {
+                    workspace.recently_used
+                        || selected_workspace
+                            .as_ref()
+                            .is_some_and(|selected| selected.path == workspace.path)
+                },
+                show_more_workspaces,
+            );
+            for entry in entries {
+                let Some(workspace) = entry else {
+                    let text = if show_more_workspaces {
+                        "Show fewer workspaces".to_string()
+                    } else if more_workspaces == 1 {
+                        "1 more workspace".to_string()
+                    } else {
+                        format!("{more_workspaces} more workspaces")
+                    };
+                    let state = state.clone();
+                    let repo_canonical = group.repo_canonical.clone();
+                    let more_row = build_more_row(&text, show_more_workspaces, move || {
+                        let mut expanded = state.show_more_workspaces.borrow_mut();
+                        if !expanded.remove(&repo_canonical) {
+                            expanded.insert(repo_canonical.clone());
+                        }
+                        drop(expanded);
+                        schedule_render_sidebar_only(&state);
+                    });
+                    more_row.add_css_class("sidebar-more-workspaces");
+                    sidebar_append_static_row(&list, &more_row);
+                    continue;
+                };
                 let is_editing = state
                     .editing_workspace
                     .borrow()
@@ -1238,6 +1380,7 @@ fn render_sidebar_content(
                     return;
                 }
 
+                mark_used(&workspace);
                 let preferred_session =
                     preferred_session_for_workspace(&state, &next_workspace_ref, None);
                 *state.selected_workspace.borrow_mut() = Some(next_workspace_ref);
@@ -1701,10 +1844,39 @@ fn build_workspace_row(
     }
 }
 
+const WORKSPACE_PR_STATE_CLASSES: [&str; 4] = [
+    "workspace-pr-success",
+    "workspace-pr-pending",
+    "workspace-pr-failure",
+    "workspace-pr-merged",
+];
+
 fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceEntry) -> Widget {
     let indicator = GtkBox::new(Orientation::Horizontal, 0);
     indicator.add_css_class("workspace-pr-indicator");
-    match workspace_pr_snapshot(state, workspace) {
+    set_workspace_status_indicator(&indicator, &workspace_pr_snapshot(state, workspace));
+    state
+        .pr_indicators
+        .borrow_mut()
+        .insert(workspace_ref(workspace), indicator.clone());
+    indicator.upcast()
+}
+
+fn apply_workspace_status_indicator(state: &Rc<AppState>, indicator: &GtkBox, workspace_ref: &str) {
+    let pr_state = state
+        .pr_statuses
+        .borrow()
+        .get(workspace_ref)
+        .map(|entry| entry.state.clone())
+        .unwrap_or(WorkspacePrState::Loading);
+    set_workspace_status_indicator(indicator, &pr_state);
+}
+
+fn set_workspace_status_indicator(indicator: &GtkBox, pr_state: &WorkspacePrState) {
+    for class in WORKSPACE_PR_STATE_CLASSES {
+        indicator.remove_css_class(class);
+    }
+    match pr_state {
         WorkspacePrState::Loading => {
             indicator.set_tooltip_text(Some("Loading pull request status..."));
         }
@@ -1724,7 +1896,6 @@ fn build_workspace_status_indicator(state: &Rc<AppState>, workspace: &WorkspaceE
             }
         }
     }
-    indicator.upcast()
 }
 
 fn install_branch_monitor(state: &Rc<AppState>, workspace: &WorkspaceEntry, branch: &Label) {
@@ -1866,14 +2037,70 @@ fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry
         .iter_mut()
         .find(|group| group.repo_canonical == workspace.repo_canonical)
     {
-        group.workspaces.push(workspace);
+        group.workspaces.insert(0, workspace);
         group.workspace_count = group.workspaces.len();
+        group.recently_used = true;
     }
     *state.workspace_groups.borrow_mut() = next_groups.clone();
     *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
     *state.editing_workspace.borrow_mut() = Some(workspace_ref.clone());
     remember_selected_session(state, &workspace_ref, selected_session.as_deref());
     schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
+}
+
+/// Splits items into those shown directly and those folded behind a "N more"
+/// row. The returned entries list the shown items in order, with `None` where
+/// the "N more" row goes, followed by the folded items when `expanded`. The
+/// count is the number of folded items. If no item is recently used, nothing
+/// is folded, so a list is never empty.
+fn fold_entries<T>(
+    items: &[T],
+    recently_used: impl Fn(&T) -> bool,
+    expanded: bool,
+) -> (Vec<Option<&T>>, usize) {
+    let (shown, folded): (Vec<_>, Vec<_>) = items.iter().partition(|item| recently_used(item));
+    if shown.is_empty() || folded.is_empty() {
+        return (items.iter().map(Some).collect(), 0);
+    }
+
+    let mut entries = shown.into_iter().map(Some).collect::<Vec<_>>();
+    entries.push(None);
+    if expanded {
+        entries.extend(folded.iter().copied().map(Some));
+    }
+    (entries, folded.len())
+}
+
+fn build_more_row(text: &str, expanded: bool, on_toggle: impl Fn() + 'static) -> Button {
+    let content = GtkBox::new(Orientation::Horizontal, 4);
+    let label = Label::new(Some(text));
+    label.set_xalign(0.0);
+    content.append(&label);
+    let icon = Image::from_icon_name(if expanded {
+        "pan-down-symbolic"
+    } else {
+        "pan-end-symbolic"
+    });
+    icon.set_pixel_size(12);
+    content.append(&icon);
+
+    let button = Button::new();
+    button.set_halign(Align::Start);
+    button.add_css_class("sidebar-more");
+    button.set_child(Some(&content));
+    button.connect_clicked(move |_| on_toggle());
+    button
+}
+
+fn mark_used(workspace: &WorkspaceEntry) {
+    exec::dispatch(
+        mark_workspace_used(workspace.repo_canonical.clone(), workspace.name.clone()),
+        |result| {
+            if let Err(err) = result {
+                eprintln!("failed to record workspace use: {err}");
+            }
+        },
+    );
 }
 
 fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
@@ -1935,18 +2162,36 @@ fn toggle_repo_collapsed_and_refresh(state: &Rc<AppState>, repo_canonical: &str,
     );
 }
 
+fn set_all_repos_collapsed_and_refresh(state: &Rc<AppState>, collapsed: bool) {
+    let state = state.clone();
+    exec::dispatch(
+        set_all_repositories_collapsed(collapsed),
+        move |result| match result {
+            Ok(()) => {
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    group.collapsed = collapsed;
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.editing_workspace.borrow_mut() = None;
+                *state.selected_session.borrow_mut() = None;
+                schedule_render_current_ui(&state, None, None);
+            }
+            Err(err) => {
+                eprintln!("failed to set collapse state for all repositories: {err}");
+                let preferred_workspace = state.selected_workspace.borrow().clone();
+                schedule_render_current_ui(&state, preferred_workspace, None);
+            }
+        },
+    );
+}
+
 fn sidebar_append_static_row<W: IsA<Widget>>(list: &ListBox, widget: &W) {
     let row = ListBoxRow::new();
     row.set_selectable(false);
     row.set_activatable(false);
     row.set_child(Some(widget));
     list.append(&row);
-}
-
-fn first_workspace(groups: &[WorkspaceGroup]) -> Option<WorkspaceEntry> {
-    groups
-        .iter()
-        .find_map(|group| group.workspaces.first().cloned())
 }
 
 fn find_workspace_by_ref(groups: &[WorkspaceGroup], selected_ref: &str) -> Option<WorkspaceEntry> {
@@ -2095,10 +2340,7 @@ fn remove_selected_workspace(state: &Rc<AppState>, workspace: &WorkspaceEntry, b
                         .selected_workspace
                         .borrow()
                         .clone()
-                        .filter(|selected| selected != &removed_workspace_ref)
-                        .or_else(|| {
-                            first_workspace(&next_groups).map(|workspace| workspace_ref(&workspace))
-                        });
+                        .filter(|selected| selected != &removed_workspace_ref);
 
                     *state.workspace_groups.borrow_mut() = next_groups.clone();
                     *state.selected_workspace.borrow_mut() = next_workspace.clone();

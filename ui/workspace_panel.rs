@@ -328,7 +328,10 @@ fn build_empty_session_placeholder(state: &Rc<AppState>, workspace: &WorkspaceEn
     } else {
         workspace.branch.as_str()
     };
-    let container = build_placeholder("No terminal open", &format!("Start a terminal in {label}."));
+    let container = build_placeholder(
+        "No terminal open",
+        &format!("Start a new terminal in workspace '{label}'."),
+    );
 
     let new_terminal = Button::new();
     new_terminal.set_halign(Align::Center);

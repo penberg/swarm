@@ -2,7 +2,7 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use swarm::{
     SwarmError,
@@ -17,6 +17,7 @@ pub struct WorkspaceGroup {
     pub repo_canonical: String,
     pub repo_status: Option<String>,
     pub collapsed: bool,
+    pub recently_used: bool,
     pub workspace_count: usize,
     pub workspaces: Vec<WorkspaceEntry>,
 }
@@ -28,6 +29,7 @@ pub struct WorkspaceEntry {
     pub branch: String,
     pub path: String,
     pub sessions: Vec<SessionEntry>,
+    pub recently_used: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -40,23 +42,42 @@ pub struct SessionEntry {
     pub socket_path: String,
 }
 
+/// How long a repository stays in the main sidebar list after its last use.
+const RECENTLY_USED_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
     let repos = repo_store.list().await?;
     let mut groups = Vec::with_capacity(repos.len());
+    let recently_used_since = unix_now() - RECENTLY_USED_WINDOW.as_secs() as i64;
 
     for repo in repos {
         let repo_label = repo.alias.clone().unwrap_or_else(|| repo.name.clone());
         let repo_canonical = repo.canonical();
         let repo_status = repo_sync_status(&repo_store, &repo);
+        let workspace_last_used = repo_store.workspace_last_used(&repo).await?;
         let workspaces = workspace_store.list(&repo_canonical).await?;
         let workspaces = workspaces.into_iter().map(|workspace| async {
             let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-            let sessions = session_store
-                .list(Some(&workspace_ref))
-                .await?
+            let sessions = session_store.list(Some(&workspace_ref)).await?;
+            let has_running_session = sessions
+                .iter()
+                .any(|session| matches!(session.status.as_str(), "running" | "starting"));
+            let last_activity = sessions
+                .iter()
+                .flat_map(|session| [Some(session.created_at), session.stopped_at])
+                .chain([
+                    Some(workspace.created_at),
+                    workspace_last_used.get(&workspace.name).copied(),
+                    workspace_last_commit(&workspace.path),
+                ])
+                .flatten()
+                .max();
+            let recently_used = has_running_session
+                || last_activity.is_some_and(|last_activity| last_activity >= recently_used_since);
+            let sessions = sessions
                 .into_iter()
                 .map(|session| SessionEntry {
                     pid: session.pid,
@@ -68,12 +89,21 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
                 })
                 .collect::<Vec<_>>();
 
-            Ok::<WorkspaceEntry, SwarmError>(map_workspace(&repo_canonical, workspace, sessions))
+            Ok::<_, SwarmError>(WorkspaceEntry {
+                recently_used,
+                ..map_workspace(&repo_canonical, workspace, sessions)
+            })
         });
         let mut workspace_entries = Vec::new();
         for workspace in workspaces {
             workspace_entries.push(workspace.await?);
         }
+        let recently_used = repo
+            .last_used_at
+            .is_some_and(|last_used_at| last_used_at >= recently_used_since)
+            || workspace_entries
+                .iter()
+                .any(|workspace| workspace.recently_used);
         let workspace_count = workspace_entries.len();
 
         groups.push(WorkspaceGroup {
@@ -81,10 +111,23 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
             repo_canonical,
             repo_status,
             collapsed: repo.collapsed,
+            recently_used,
             workspace_count,
             workspaces: workspace_entries,
         });
     }
+
+    groups.sort_by(|left, right| {
+        right
+            .recently_used
+            .cmp(&left.recently_used)
+            .then_with(|| {
+                left.repo_label
+                    .to_lowercase()
+                    .cmp(&right.repo_label.to_lowercase())
+            })
+            .then_with(|| left.repo_canonical.cmp(&right.repo_canonical))
+    });
 
     Ok(groups)
 }
@@ -151,6 +194,18 @@ pub async fn set_repository_collapsed(
         repo_store.expand(&repository).await?;
     }
     Ok(())
+}
+
+pub async fn set_all_repositories_collapsed(collapsed: bool) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.set_all_collapsed(collapsed).await
+}
+
+pub async fn mark_workspace_used(repository: String, workspace: String) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store
+        .mark_workspace_used(&repository, &workspace)
+        .await
 }
 
 pub async fn rename_workspace(
@@ -332,15 +387,28 @@ fn packed_ref_target(packed_refs: &str, ref_name: &str) -> Option<String> {
 }
 
 pub fn workspace_head_path(path: &str) -> Result<PathBuf, SwarmError> {
-    let workspace_path = Path::new(path);
-    let git_path = workspace_path.join(".git");
-    let git_dir = if git_path.is_dir() {
-        git_path
-    } else {
-        resolve_gitdir_file(&git_path, workspace_path)?
-    };
+    Ok(workspace_git_dir(Path::new(path))?.join("HEAD"))
+}
 
-    Ok(git_dir.join("HEAD"))
+/// Returns when HEAD last moved in a workspace (commit, checkout, reset), from
+/// the modification time of its HEAD reflog.
+fn workspace_last_commit(workspace_path: &Path) -> Option<i64> {
+    let reflog = workspace_git_dir(workspace_path)
+        .ok()?
+        .join("logs")
+        .join("HEAD");
+    let modified = file_modified_time(reflog)?;
+    let elapsed = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some(elapsed.as_secs() as i64)
+}
+
+fn workspace_git_dir(workspace_path: &Path) -> Result<PathBuf, SwarmError> {
+    let git_path = workspace_path.join(".git");
+    if git_path.is_dir() {
+        return Ok(git_path);
+    }
+
+    resolve_gitdir_file(&git_path, workspace_path)
 }
 
 fn map_workspace(
@@ -354,6 +422,8 @@ fn map_workspace(
         branch: workspace.branch,
         path: workspace.path.display().to_string(),
         sessions,
+        // Workspaces that were just created, cloned or renamed are in use.
+        recently_used: true,
     }
 }
 
@@ -372,6 +442,13 @@ fn repo_sync_status(repo_store: &RepositoryStore, repo: &Repository) -> Option<S
     .find_map(file_modified_time)?;
 
     Some(format_relative_sync_time(timestamp))
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn file_modified_time(path: PathBuf) -> Option<SystemTime> {
