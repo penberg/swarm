@@ -19,11 +19,13 @@ Splay was previously called Swarm. Read the [announcement blog post](https://pen
 
 ## Installation
 
-Splay runs on Linux. Install the latest prebuilt release with:
+Splay runs on Linux (x86-64, glibc 2.39 or newer, GTK 4). Install the latest release with:
 
 ```console
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/splay-sh/splay/releases/latest/download/splay-installer.sh | sh
+curl -fsSL https://splay.sh/install.sh | sh
 ```
+
+This puts `splay` and `splayctl` in `~/.local/bin` and adds Splay to your app launcher.
 
 ## Getting started
 
