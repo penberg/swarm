@@ -5,11 +5,12 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use turso::{Builder, Connection};
+use turso::{Builder, Connection, Row};
 
 use crate::{
     SplayError, database_error,
     repos::{Repository, RepositoryStore},
+    sandbox::{CreateRequest, Progress, RepoPaths, SandboxKind, sandbox},
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -21,6 +22,8 @@ pub struct Workspace {
     pub path: PathBuf,
     pub created_at: i64,
     pub archived_at: Option<i64>,
+    pub sandbox: SandboxKind,
+    pub sandbox_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +60,8 @@ impl WorkspaceStore {
         &self,
         repository: &str,
         name: Option<&str>,
+        sandbox_kind: SandboxKind,
+        progress: Progress<'_>,
     ) -> Result<Workspace, SplayError> {
         let repo = self
             .repos
@@ -64,6 +69,7 @@ impl WorkspaceStore {
             .await?
             .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
         let db = self.open_repo_db(&repo).await?;
+        progress("Syncing repository");
         let default_branch = self.ensure_bare_repo(&repo)?;
         let requested_name = resolve_workspace_name(name)?;
         let workspaces_dir = self.repos.workspaces_dir(&repo);
@@ -72,22 +78,31 @@ impl WorkspaceStore {
             Self::allocate_workspace_name(&db, &workspaces_dir, &requested_name).await?;
         let workspace_path = workspaces_dir.join(&workspace_name);
 
+        let repo_dir = self.repos.repo_dir(&repo);
         let bare_repo_path = self.repos.bare_repo_path(&repo);
-        let branch = self.materialize_worktree(
-            &bare_repo_path,
-            &workspace_path,
-            &workspace_name,
-            &default_branch,
-        )?;
+        let checkout = sandbox(sandbox_kind).create(&CreateRequest {
+            repo: &repo,
+            paths: RepoPaths {
+                repo_dir: &repo_dir,
+                bare_repo_path: &bare_repo_path,
+            },
+            workspace_path: &workspace_path,
+            workspace_name: &workspace_name,
+            default_branch: &default_branch,
+            progress,
+        })?;
         let created_at = unix_timestamp();
 
         db.execute(
-            "INSERT INTO workspaces (name, branch, path, created_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO workspaces (name, branch, path, created_at, sandbox, sandbox_ref)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             (
                 workspace_name.as_str(),
-                branch.as_str(),
+                checkout.branch.as_str(),
                 path_to_string(&workspace_path)?,
                 created_at,
+                sandbox_kind.as_str(),
+                checkout.sandbox_ref.as_deref(),
             ),
         )
         .await?;
@@ -96,10 +111,12 @@ impl WorkspaceStore {
             repository: repo.canonical(),
             repository_alias: repo.alias.clone().unwrap_or_else(|| repo.name.clone()),
             name: workspace_name,
-            branch,
+            branch: checkout.branch,
             path: workspace_path,
             created_at,
             archived_at: None,
+            sandbox: sandbox_kind,
+            sandbox_ref: checkout.sandbox_ref,
         })
     }
 
@@ -113,6 +130,12 @@ impl WorkspaceStore {
             .find_workspace(&db, &repo, &reference.workspace)
             .await?
             .ok_or_else(|| SplayError::WorkspaceNotFound(workspace.to_string()))?;
+        if source.sandbox != SandboxKind::Local {
+            return Err(SplayError::InvalidWorkspace(format!(
+                "cannot clone {} workspace `{}`",
+                source.sandbox, source.name
+            )));
+        }
         let requested_name = resolve_workspace_name(Some(name))?;
         let workspaces_dir = self.repos.workspaces_dir(&repo);
         fs::create_dir_all(&workspaces_dir)?;
@@ -148,6 +171,8 @@ impl WorkspaceStore {
             path: workspace_path,
             created_at,
             archived_at: None,
+            sandbox: SandboxKind::Local,
+            sandbox_ref: None,
         })
     }
 
@@ -160,7 +185,7 @@ impl WorkspaceStore {
         let db = self.open_repo_db(&repo).await?;
         let mut stmt = db
             .prepare(
-                "SELECT name, branch, path, created_at, archived_at
+                "SELECT name, branch, path, created_at, archived_at, sandbox, sandbox_ref
                  FROM workspaces
                  WHERE archived_at IS NULL
                  ORDER BY created_at DESC, name",
@@ -170,15 +195,7 @@ impl WorkspaceStore {
         let mut workspaces = Vec::new();
 
         while let Some(row) = rows.next().await? {
-            let workspace = Workspace {
-                repository: repo.canonical(),
-                repository_alias: repo.alias.clone().unwrap_or_else(|| repo.name.clone()),
-                name: row.get::<String>(0)?,
-                branch: row.get::<String>(1)?,
-                path: PathBuf::from(row.get::<String>(2)?),
-                created_at: row.get::<i64>(3)?,
-                archived_at: row.get::<Option<i64>>(4)?, // <-- ADD THIS
-            };
+            let workspace = workspace_from_row(&repo, &row)?;
             workspaces.push(self.refresh_workspace_branch(&db, workspace).await?);
         }
 
@@ -228,57 +245,39 @@ impl WorkspaceStore {
             .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
         let db = self.open_repo_db(&repo).await?;
         let mut stmt = db
-            .prepare("SELECT name, path FROM workspaces WHERE archived_at IS NOT NULL")
+            .prepare(
+                "SELECT name, branch, path, created_at, archived_at, sandbox, sandbox_ref
+                 FROM workspaces
+                 WHERE archived_at IS NOT NULL",
+            )
             .await?;
         let mut rows = stmt.query(()).await?;
         let mut archived_workspaces = Vec::new();
 
         while let Some(row) = rows.next().await? {
-            archived_workspaces.push((row.get::<String>(0)?, PathBuf::from(row.get::<String>(1)?)));
+            archived_workspaces.push(workspace_from_row(&repo, &row)?);
         }
 
         let mut report = PruneReport::default();
+        let repo_dir = self.repos.repo_dir(&repo);
         let bare_repo_path = self.repos.bare_repo_path(&repo);
-        for (name, path) in archived_workspaces {
-            let removed = run_git(
-                Some(&self.repos.repo_dir(&repo)),
-                [
-                    format!("--git-dir={}", bare_repo_path.display()),
-                    "worktree".to_string(),
-                    "remove".to_string(),
-                    "--force".to_string(),
-                    path.display().to_string(),
-                ],
-            );
-
-            if removed.is_err() {
-                // Git refuses to remove a worktree it no longer recognizes,
-                // e.g. when the directory was deleted out from under it.
-                // Clean up whatever is left on disk and let `git worktree
-                // prune` discard the stale bookkeeping.
-                if path.exists() {
-                    if let Err(err) = fs::remove_dir_all(&path) {
-                        // Keep the row so the workspace shows up in the next
-                        // prune, and keep going: one stuck workspace must not
-                        // block the rest.
-                        report.failed.push(PruneFailure {
-                            name,
-                            path,
-                            error: err.into(),
-                        });
-                        continue;
-                    }
-                }
-                let _ = run_git(
-                    Some(&self.repos.repo_dir(&repo)),
-                    [
-                        format!("--git-dir={}", bare_repo_path.display()),
-                        "worktree".to_string(),
-                        "prune".to_string(),
-                    ],
-                );
+        let paths = RepoPaths {
+            repo_dir: &repo_dir,
+            bare_repo_path: &bare_repo_path,
+        };
+        for workspace in archived_workspaces {
+            if let Err(error) = sandbox(workspace.sandbox).destroy(&workspace, &paths) {
+                // Keep the row so the workspace shows up in the next prune,
+                // and keep going: one stuck workspace must not block the rest.
+                report.failed.push(PruneFailure {
+                    name: workspace.name,
+                    path: workspace.path,
+                    error,
+                });
+                continue;
             }
 
+            let name = workspace.name;
             db.execute("DELETE FROM workspaces WHERE name = ?1", [name.as_str()])
                 .await?;
 
@@ -302,6 +301,13 @@ impl WorkspaceStore {
 
         if next_name == workspace.name {
             return Ok(workspace);
+        }
+
+        if workspace.sandbox != SandboxKind::Local {
+            return Err(SplayError::InvalidWorkspace(format!(
+                "cannot rename {} workspace `{}`",
+                workspace.sandbox, workspace.name
+            )));
         }
 
         if self.find_workspace(&db, &repo, &next_name).await?.is_some() {
@@ -370,6 +376,8 @@ impl WorkspaceStore {
             path: next_path,
             created_at: workspace.created_at,
             archived_at: workspace.archived_at,
+            sandbox: workspace.sandbox,
+            sandbox_ref: workspace.sandbox_ref,
         })
     }
 
@@ -424,7 +432,7 @@ impl WorkspaceStore {
     ) -> Result<Option<Workspace>, SplayError> {
         let mut stmt = db
             .prepare(
-                "SELECT name, branch, path, created_at, archived_at
+                "SELECT name, branch, path, created_at, archived_at, sandbox, sandbox_ref
                  FROM workspaces
                  WHERE name = ?1 AND archived_at IS NULL
                  LIMIT 1",
@@ -433,15 +441,7 @@ impl WorkspaceStore {
         let mut rows = stmt.query([name]).await?;
 
         if let Some(row) = rows.next().await? {
-            let workspace = Workspace {
-                repository: repo.canonical(),
-                repository_alias: repo.alias.clone().unwrap_or_else(|| repo.name.clone()),
-                name: row.get::<String>(0)?,
-                branch: row.get::<String>(1)?,
-                path: PathBuf::from(row.get::<String>(2)?),
-                created_at: row.get::<i64>(3)?,
-                archived_at: row.get::<Option<i64>>(4)?,
-            };
+            let workspace = workspace_from_row(repo, &row)?;
             return Ok(Some(self.refresh_workspace_branch(db, workspace).await?));
         }
 
@@ -453,6 +453,11 @@ impl WorkspaceStore {
         db: &Connection,
         workspace: Workspace,
     ) -> Result<Workspace, SplayError> {
+        // Remote checkouts are not reachable from here; keep the recorded branch.
+        if workspace.sandbox != SandboxKind::Local {
+            return Ok(workspace);
+        }
+
         let branch = git_current_branch(&workspace.path)?;
         if branch == workspace.branch {
             return Ok(workspace);
@@ -626,26 +631,6 @@ impl WorkspaceStore {
             .to_string())
     }
 
-    fn materialize_worktree(
-        &self,
-        bare_repo_path: &Path,
-        workspace_path: &Path,
-        workspace_name: &str,
-        default_branch: &str,
-    ) -> Result<String, SplayError> {
-        let args = build_worktree_add_args(
-            bare_repo_path,
-            workspace_path,
-            workspace_name,
-            default_branch,
-        )?;
-        let branch = workspace_name.to_string();
-
-        run_git(workspace_path.parent(), args)?;
-
-        Ok(branch)
-    }
-
     fn materialize_cloned_worktree(
         &self,
         bare_repo_path: &Path,
@@ -666,6 +651,20 @@ impl WorkspaceStore {
 
         Ok(branch)
     }
+}
+
+fn workspace_from_row(repo: &Repository, row: &Row) -> Result<Workspace, SplayError> {
+    Ok(Workspace {
+        repository: repo.canonical(),
+        repository_alias: repo.alias.clone().unwrap_or_else(|| repo.name.clone()),
+        name: row.get::<String>(0)?,
+        branch: row.get::<String>(1)?,
+        path: PathBuf::from(row.get::<String>(2)?),
+        created_at: row.get::<i64>(3)?,
+        archived_at: row.get::<Option<i64>>(4)?,
+        sandbox: SandboxKind::parse(&row.get::<String>(5)?)?,
+        sandbox_ref: row.get::<Option<String>>(6)?,
+    })
 }
 
 pub fn parse_workspace_reference(input: &str) -> Result<WorkspaceReference, SplayError> {
@@ -703,7 +702,7 @@ fn resolve_workspace_name(name: Option<&str>) -> Result<String, SplayError> {
     Ok(workspace_name.to_string())
 }
 
-fn build_worktree_add_args(
+pub(crate) fn build_worktree_add_args(
     bare_repo_path: &Path,
     workspace_path: &Path,
     workspace_name: &str,
@@ -753,7 +752,7 @@ fn git_rev_parse(path: &Path, revision: &str) -> Result<String, SplayError> {
     run_git(Some(path), ["rev-parse", revision])
 }
 
-fn run_git<I, S>(cwd: Option<&Path>, args: I) -> Result<String, SplayError>
+pub(crate) fn run_git<I, S>(cwd: Option<&Path>, args: I) -> Result<String, SplayError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -839,13 +838,35 @@ pub async fn migrate_repo_db(conn: &Connection, path: &Path) -> Result<(), Splay
     .await
     .map_err(|err| database_error(path, "initialize schema", err))?;
 
-    let columns = table_columns(conn, "workspaces", path).await?;
+    let mut columns = table_columns(conn, "workspaces", path).await?;
 
     if columns == ["name", "branch", "path", "created_at"] {
         conn.execute("ALTER TABLE workspaces ADD COLUMN archived_at INTEGER", ())
             .await
             .map_err(|err| database_error(path, "migrate workspaces schema", err))?;
-    } else if columns != ["name", "branch", "path", "created_at", "archived_at"] {
+        columns.push("archived_at".to_string());
+    }
+
+    if columns == ["name", "branch", "path", "created_at", "archived_at"] {
+        conn.execute_batch(
+            "
+            ALTER TABLE workspaces ADD COLUMN sandbox TEXT NOT NULL DEFAULT 'local';
+            ALTER TABLE workspaces ADD COLUMN sandbox_ref TEXT;
+            ",
+        )
+        .await
+        .map_err(|err| database_error(path, "migrate workspaces schema", err))?;
+    } else if columns
+        != [
+            "name",
+            "branch",
+            "path",
+            "created_at",
+            "archived_at",
+            "sandbox",
+            "sandbox_ref",
+        ]
+    {
         return Err(SplayError::Io(std::io::Error::other(format!(
             "unsupported workspaces schema columns: {}",
             columns.join(", ")
@@ -1088,11 +1109,22 @@ mod tests {
         }
         assert_eq!(
             columns,
-            vec!["name", "branch", "path", "created_at", "archived_at"]
+            vec![
+                "name",
+                "branch",
+                "path",
+                "created_at",
+                "archived_at",
+                "sandbox",
+                "sandbox_ref"
+            ]
         );
 
         let mut stmt = conn
-            .prepare("SELECT name, branch, path, created_at, archived_at FROM workspaces")
+            .prepare(
+                "SELECT name, branch, path, created_at, archived_at, sandbox, sandbox_ref
+                 FROM workspaces",
+            )
             .await
             .unwrap();
         let mut rows = stmt.query(()).await.unwrap();
@@ -1102,6 +1134,8 @@ mod tests {
         assert_eq!(row.get::<String>(2).unwrap(), "/tmp/workspaces/main");
         assert_eq!(row.get::<i64>(3).unwrap(), 123);
         assert_eq!(row.get::<Option<i64>>(4).unwrap(), None);
+        assert_eq!(row.get::<String>(5).unwrap(), "local");
+        assert_eq!(row.get::<Option<String>>(6).unwrap(), None);
     }
 
     #[tokio::test]

@@ -1,6 +1,7 @@
 use splay::{
     SplayError,
     repos::{Repository, RepositoryStore},
+    sandbox::SandboxKind,
     sessions::{SessionStore, default_session_command},
     workspaces::{Workspace, WorkspaceStore},
 };
@@ -28,8 +29,17 @@ pub struct WorkspaceEntry {
     pub name: String,
     pub branch: String,
     pub path: String,
+    pub sandbox: SandboxKind,
     pub sessions: Vec<SessionEntry>,
     pub recently_used: bool,
+    /// Set while the workspace is being created; such entries exist only in the UI.
+    pub provisioning: Option<Provisioning>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Provisioning {
+    pub stage: String,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +145,8 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
 pub async fn create_workspace(
     repository: String,
     name: Option<String>,
+    sandbox: SandboxKind,
+    progress: impl Fn(&str) + Send + Sync + 'static,
 ) -> Result<WorkspaceEntry, SplayError> {
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
@@ -144,7 +156,10 @@ pub async fn create_workspace(
         .resolve_repository(&repository)
         .await?
         .ok_or_else(|| SplayError::RepositoryNotFound(repository.clone()))?;
-    let workspace = workspace_store.create(&repository, name.as_deref()).await?;
+    let workspace = workspace_store
+        .create(&repository, name.as_deref(), sandbox, &progress)
+        .await?;
+    progress("Starting session");
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
     if let Err(err) = session_store
         .create(&workspace_ref, &default_session_command())
@@ -421,7 +436,9 @@ fn map_workspace(
         name: workspace.name,
         branch: workspace.branch,
         path: workspace.path.display().to_string(),
+        sandbox: workspace.sandbox,
         sessions,
+        provisioning: None,
         // Workspaces that were just created, cloned or renamed are in use.
         recently_used: true,
     }

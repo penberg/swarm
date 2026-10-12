@@ -1,6 +1,7 @@
 use crate::{
     SplayError,
     opts::{WorkspaceCommand, WorkspaceSubcommand},
+    sandbox::SandboxKind,
     sessions::{SessionStore, default_session_command},
     workspaces::WorkspaceStore,
 };
@@ -9,8 +10,19 @@ pub async fn run(cmd: WorkspaceCommand) -> Result<(), SplayError> {
     let store = WorkspaceStore::open().await?;
 
     match cmd.command {
-        WorkspaceSubcommand::Create { repository, name } => {
-            let workspace = store.create(&repository, name.as_deref()).await?;
+        WorkspaceSubcommand::Create {
+            repository,
+            name,
+            sandbox,
+        } => {
+            let workspace = store
+                .create(
+                    &repository,
+                    name.as_deref(),
+                    SandboxKind::parse(&sandbox)?,
+                    &|stage| eprintln!("{stage}..."),
+                )
+                .await?;
             let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
             let session_store = SessionStore::open().await?;
             let session = session_store
@@ -59,6 +71,10 @@ pub async fn run(cmd: WorkspaceCommand) -> Result<(), SplayError> {
             println!("Workspace: {}", workspace.name);
             println!("Branch: {}", workspace.branch);
             println!("Path: {}", workspace.path.display());
+            println!("Sandbox: {}", workspace.sandbox);
+            if let Some(sandbox_ref) = &workspace.sandbox_ref {
+                println!("Sandbox reference: {sandbox_ref}");
+            }
             println!("Created: {}", workspace.created_at);
         }
         WorkspaceSubcommand::Remove { workspace } => {

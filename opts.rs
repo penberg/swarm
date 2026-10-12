@@ -53,6 +53,8 @@ pub enum WorkspaceSubcommand {
     Create {
         repository: String,
         name: Option<String>,
+        #[arg(long, default_value = "local", value_parser = ["local", "exedev"])]
+        sandbox: String,
     },
     Clone {
         workspace: String,

@@ -21,6 +21,7 @@ use turso::{Builder, Connection, Row};
 use crate::{
     SplayError, database_error,
     repos::{Repository, RepositoryStore},
+    sandbox::sandbox,
     toolchains,
     workspaces::{Workspace, WorkspaceStore, migrate_repo_db},
 };
@@ -103,7 +104,9 @@ impl SessionStore {
         .map_err(|err| database_error(&repo_db_path, "insert session", err))?;
 
         drop(db);
-        self.spawn_supervisor(&repo, &workspace, &session, command)?;
+        let launch_command =
+            sandbox(workspace.sandbox).session_command(&repo, &workspace, command)?;
+        self.spawn_supervisor(&repo, &workspace, &session, &launch_command)?;
         self.wait_until_ready(&repo, &session).await?;
         self.mark_session_running(&repo, &session).await?;
 

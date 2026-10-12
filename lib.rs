@@ -4,6 +4,7 @@ mod legacy;
 pub mod opts;
 pub mod prune;
 pub mod repos;
+pub mod sandbox;
 pub mod sessions;
 pub mod toolchains;
 pub mod workspaces;
@@ -62,6 +63,12 @@ pub enum SplayError {
 
     #[error("session `{0}` is still running")]
     SessionRunning(String),
+
+    #[error("invalid sandbox `{0}`; expected local or exedev")]
+    InvalidSandbox(String),
+
+    #[error("sandbox command failed: {0}")]
+    Sandbox(String),
 
     #[error("git command failed: {0}")]
     Git(String),
