@@ -98,6 +98,11 @@ Stores one row per repository:
 
 Canonical identity: the `(host, owner, name)` tuple. Aliases are shortcuts, not primary identifiers.
 
+Also stores a `workspace_usage` table with one row per workspace selected in the UI:
+- `repository`: canonical `host/owner/name`
+- `workspace`: workspace name
+- `last_used_at`: Unix timestamp of when the workspace was last selected
+
 ### `repos/<host>/<owner>/<name>/`
 
 Per-repository directory. Example:
@@ -409,7 +414,7 @@ swarm workspace list <repository> --json
 #### Behavior
 
 - Reads workspace records from `repo.db`.
-- Prints one workspace per row.
+- Prints one workspace per row, newest first.
 
 #### Examples
 

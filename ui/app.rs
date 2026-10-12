@@ -19,7 +19,7 @@ use swarm::forges::github::{self, PullRequestStatus, PullRequestStatusState};
 use crate::{
     data::{
         WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, create_workspace,
-        current_workspace_branch, load_workspace_groups, mark_repository_used, read_workspace_head,
+        current_workspace_branch, load_workspace_groups, mark_workspace_used, read_workspace_head,
         remove_workspace, rename_workspace, set_all_repositories_collapsed,
         set_repository_collapsed, sync_repository, workspace_head_path,
     },
@@ -186,7 +186,7 @@ window {
   opacity: 1;
 }
 
-.more-repositories {
+.sidebar-more {
   min-height: 24px;
   margin-top: 14px;
   padding: 0 6px;
@@ -198,7 +198,12 @@ window {
   font-weight: 700;
 }
 
-.more-repositories:hover {
+.sidebar-more-workspaces {
+  margin-top: 2px;
+  margin-left: 4px;
+}
+
+.sidebar-more:hover {
   background: rgba(255, 255, 255, 0.04);
   color: #e7f3ff;
 }
@@ -540,6 +545,7 @@ fn build_ui(app: &Application) {
         detail_widgets: RefCell::new(None),
         workspace_groups: RefCell::new(Vec::new()),
         show_more_repositories: Cell::new(false),
+        show_more_workspaces: RefCell::new(HashSet::new()),
         selected_workspace: RefCell::new(None),
         editing_workspace: RefCell::new(None),
         selected_session: RefCell::new(None),
@@ -581,6 +587,8 @@ pub struct AppState {
     pub detail_widgets: RefCell<Option<DetailWidgets>>,
     pub workspace_groups: RefCell<Vec<WorkspaceGroup>>,
     show_more_repositories: Cell<bool>,
+    /// Repositories whose folded workspaces are currently shown.
+    show_more_workspaces: RefCell<HashSet<String>>,
     pub selected_workspace: RefCell<Option<String>>,
     editing_workspace: RefCell<Option<String>>,
     pub selected_session: RefCell<Option<String>>,
@@ -1234,28 +1242,24 @@ fn render_sidebar_content(
 
     let rows = Rc::new(RefCell::new(Vec::<WorkspaceRow>::new()));
 
-    // Repositories that have not been used recently are folded behind a
-    // "N more repositories" row. If none have been used recently, everything
-    // is shown so the sidebar is never empty.
-    let (recently_used, more): (Vec<_>, Vec<_>) =
-        groups.iter().partition(|group| group.recently_used);
-    let (visible, more) = if recently_used.is_empty() {
-        (more, Vec::new())
-    } else {
-        (recently_used, more)
-    };
-    let show_more = state.show_more_repositories.get();
-    let mut entries = visible.into_iter().map(Some).collect::<Vec<_>>();
-    if !more.is_empty() {
-        entries.push(None);
-        if show_more {
-            entries.extend(more.iter().copied().map(Some));
-        }
-    }
+    let show_more_repositories = state.show_more_repositories.get();
+    let (entries, more_repositories) =
+        fold_entries(groups, |group| group.recently_used, show_more_repositories);
 
     for entry in entries {
         let Some(group) = entry else {
-            let more_row = build_more_repositories_row(state, more.len(), show_more);
+            let text = if show_more_repositories {
+                "Show fewer repositories".to_string()
+            } else if more_repositories == 1 {
+                "1 more repository".to_string()
+            } else {
+                format!("{more_repositories} more repositories")
+            };
+            let state = state.clone();
+            let more_row = build_more_row(&text, show_more_repositories, move || {
+                state.show_more_repositories.set(!show_more_repositories);
+                schedule_render_sidebar_only(&state);
+            });
             sidebar_append_static_row(&list, &more_row);
             continue;
         };
@@ -1274,7 +1278,43 @@ fn render_sidebar_content(
         sidebar_append_static_row(&list, &repo_row);
 
         if !group.collapsed {
-            for workspace in &group.workspaces {
+            let show_more_workspaces = state
+                .show_more_workspaces
+                .borrow()
+                .contains(&group.repo_canonical);
+            let (entries, more_workspaces) = fold_entries(
+                &group.workspaces,
+                |workspace| {
+                    workspace.recently_used
+                        || selected_workspace
+                            .as_ref()
+                            .is_some_and(|selected| selected.path == workspace.path)
+                },
+                show_more_workspaces,
+            );
+            for entry in entries {
+                let Some(workspace) = entry else {
+                    let text = if show_more_workspaces {
+                        "Show fewer workspaces".to_string()
+                    } else if more_workspaces == 1 {
+                        "1 more workspace".to_string()
+                    } else {
+                        format!("{more_workspaces} more workspaces")
+                    };
+                    let state = state.clone();
+                    let repo_canonical = group.repo_canonical.clone();
+                    let more_row = build_more_row(&text, show_more_workspaces, move || {
+                        let mut expanded = state.show_more_workspaces.borrow_mut();
+                        if !expanded.remove(&repo_canonical) {
+                            expanded.insert(repo_canonical.clone());
+                        }
+                        drop(expanded);
+                        schedule_render_sidebar_only(&state);
+                    });
+                    more_row.add_css_class("sidebar-more-workspaces");
+                    sidebar_append_static_row(&list, &more_row);
+                    continue;
+                };
                 let is_editing = state
                     .editing_workspace
                     .borrow()
@@ -1342,7 +1382,7 @@ fn render_sidebar_content(
                     return;
                 }
 
-                mark_repo_used(&workspace.repo_canonical);
+                mark_used(&workspace);
                 let preferred_session =
                     preferred_session_for_workspace(&state, &next_workspace_ref, None);
                 *state.selected_workspace.borrow_mut() = Some(next_workspace_ref);
@@ -1999,8 +2039,9 @@ fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry
         .iter_mut()
         .find(|group| group.repo_canonical == workspace.repo_canonical)
     {
-        group.workspaces.push(workspace);
+        group.workspaces.insert(0, workspace);
         group.workspace_count = group.workspaces.len();
+        group.recently_used = true;
     }
     *state.workspace_groups.borrow_mut() = next_groups.clone();
     *state.selected_workspace.borrow_mut() = Some(workspace_ref.clone());
@@ -2009,15 +2050,32 @@ fn select_and_edit_new_workspace(state: &Rc<AppState>, workspace: WorkspaceEntry
     schedule_render_current_ui(state, Some(workspace_ref), preferred_session);
 }
 
-fn build_more_repositories_row(state: &Rc<AppState>, count: usize, expanded: bool) -> Button {
+/// Splits items into those shown directly and those folded behind a "N more"
+/// row. The returned entries list the shown items in order, with `None` where
+/// the "N more" row goes, followed by the folded items when `expanded`. The
+/// count is the number of folded items. If no item is recently used, nothing
+/// is folded, so a list is never empty.
+fn fold_entries<T>(
+    items: &[T],
+    recently_used: impl Fn(&T) -> bool,
+    expanded: bool,
+) -> (Vec<Option<&T>>, usize) {
+    let (shown, folded): (Vec<_>, Vec<_>) = items.iter().partition(|item| recently_used(item));
+    if shown.is_empty() || folded.is_empty() {
+        return (items.iter().map(Some).collect(), 0);
+    }
+
+    let mut entries = shown.into_iter().map(Some).collect::<Vec<_>>();
+    entries.push(None);
+    if expanded {
+        entries.extend(folded.iter().copied().map(Some));
+    }
+    (entries, folded.len())
+}
+
+fn build_more_row(text: &str, expanded: bool, on_toggle: impl Fn() + 'static) -> Button {
     let content = GtkBox::new(Orientation::Horizontal, 4);
-    let label = Label::new(Some(&if expanded {
-        "Show fewer repositories".to_string()
-    } else if count == 1 {
-        "1 more repository".to_string()
-    } else {
-        format!("{count} more repositories")
-    }));
+    let label = Label::new(Some(text));
     label.set_xalign(0.0);
     content.append(&label);
     let icon = Image::from_icon_name(if expanded {
@@ -2030,24 +2088,21 @@ fn build_more_repositories_row(state: &Rc<AppState>, count: usize, expanded: boo
 
     let button = Button::new();
     button.set_halign(Align::Start);
-    button.add_css_class("more-repositories");
+    button.add_css_class("sidebar-more");
     button.set_child(Some(&content));
-    {
-        let state = state.clone();
-        button.connect_clicked(move |_| {
-            state.show_more_repositories.set(!expanded);
-            schedule_render_sidebar_only(&state);
-        });
-    }
+    button.connect_clicked(move |_| on_toggle());
     button
 }
 
-fn mark_repo_used(repo_canonical: &str) {
-    exec::dispatch(mark_repository_used(repo_canonical.to_string()), |result| {
-        if let Err(err) = result {
-            eprintln!("failed to record repository use: {err}");
-        }
-    });
+fn mark_used(workspace: &WorkspaceEntry) {
+    exec::dispatch(
+        mark_workspace_used(workspace.repo_canonical.clone(), workspace.name.clone()),
+        |result| {
+            if let Err(err) = result {
+                eprintln!("failed to record workspace use: {err}");
+            }
+        },
+    );
 }
 
 fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
@@ -2142,9 +2197,11 @@ fn sidebar_append_static_row<W: IsA<Widget>>(list: &ListBox, widget: &W) {
 }
 
 fn first_workspace(groups: &[WorkspaceGroup]) -> Option<WorkspaceEntry> {
-    groups
-        .iter()
-        .find_map(|group| group.workspaces.first().cloned())
+    let workspaces = || groups.iter().flat_map(|group| &group.workspaces);
+    workspaces()
+        .find(|workspace| workspace.recently_used)
+        .or_else(|| workspaces().next())
+        .cloned()
 }
 
 fn find_workspace_by_ref(groups: &[WorkspaceGroup], selected_ref: &str) -> Option<WorkspaceEntry> {

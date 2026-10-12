@@ -1,6 +1,7 @@
 use directories::ProjectDirs;
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -139,6 +140,13 @@ impl RepositoryStore {
             CREATE UNIQUE INDEX IF NOT EXISTS repos_alias_idx
             ON repos(alias)
             WHERE alias IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS workspace_usage (
+                repository TEXT NOT NULL,
+                workspace TEXT NOT NULL,
+                last_used_at INTEGER NOT NULL,
+                PRIMARY KEY (repository, workspace)
+            );
             ",
         )
         .await
@@ -381,11 +389,19 @@ impl RepositoryStore {
         Ok(())
     }
 
-    pub async fn mark_used(&self, repository: &str) -> Result<(), SwarmError> {
+    /// Records that a workspace was used, which also counts as using its
+    /// repository.
+    pub async fn mark_workspace_used(
+        &self,
+        repository: &str,
+        workspace: &str,
+    ) -> Result<(), SwarmError> {
         let repo = self
             .resolve(repository)
             .await?
             .ok_or_else(|| SwarmError::RepositoryNotFound(repository.to_string()))?;
+        let canonical = repo.canonical();
+        let now = unix_timestamp();
 
         self.conn
             .execute(
@@ -396,12 +412,55 @@ impl RepositoryStore {
                     repo.host.as_str(),
                     repo.owner.as_str(),
                     repo.name.as_str(),
-                    unix_timestamp(),
+                    now,
                 ),
             )
             .await?;
 
+        let updated = self
+            .conn
+            .execute(
+                "UPDATE workspace_usage
+                 SET last_used_at = ?3
+                 WHERE repository = ?1 AND workspace = ?2",
+                (canonical.as_str(), workspace, now),
+            )
+            .await?;
+        if updated == 0 {
+            self.conn
+                .execute(
+                    "INSERT INTO workspace_usage (repository, workspace, last_used_at)
+                     VALUES (?1, ?2, ?3)",
+                    (canonical.as_str(), workspace, now),
+                )
+                .await?;
+        }
+
         Ok(())
+    }
+
+    /// Returns when each workspace of a repository was last used, keyed by
+    /// workspace name.
+    pub async fn workspace_last_used(
+        &self,
+        repo: &Repository,
+    ) -> Result<HashMap<String, i64>, SwarmError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT workspace, last_used_at
+                 FROM workspace_usage
+                 WHERE repository = ?1",
+            )
+            .await?;
+        let mut rows = stmt.query([repo.canonical()]).await?;
+        let mut last_used = HashMap::new();
+
+        while let Some(row) = rows.next().await? {
+            last_used.insert(row.get::<String>(0)?, row.get::<i64>(1)?);
+        }
+
+        Ok(last_used)
     }
 
     async fn find_repository(&self, repo: &Repository) -> Result<Option<Repository>, SwarmError> {
