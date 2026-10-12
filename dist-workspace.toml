@@ -15,7 +15,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-github-build-setup = "github-build-setup.yml"
+github-build-setup = "../build-setup.yml"
 
 # Linux system dependencies for dist builds and documented local UI builds.
 [dist.dependencies.apt]
