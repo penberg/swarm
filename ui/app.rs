@@ -581,7 +581,8 @@ pub struct AppState {
 struct SidebarWidgets {
     container: GtkBox,
     add_repository_button: Button,
-    collapse_controls: GtkBox,
+    collapse_all_button: Button,
+    collapse_all_icon: Image,
     repository_form: RepositoryFormWidgets,
     scroller: ScrolledWindow,
 }
@@ -1116,11 +1117,20 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     toolbar_spacer.set_hexpand(true);
     toolbar.append(&toolbar_spacer);
 
-    let collapse_controls = GtkBox::new(Orientation::Horizontal, 2);
-    collapse_controls.set_valign(Align::Center);
-    collapse_controls.append(&build_collapse_all_button(state, true));
-    collapse_controls.append(&build_collapse_all_button(state, false));
-    toolbar.append(&collapse_controls);
+    let collapse_all_button = Button::new();
+    collapse_all_button.set_valign(Align::Center);
+    collapse_all_button.add_css_class("repo-toggle");
+    let collapse_all_icon = Image::from_icon_name("pan-down-symbolic");
+    collapse_all_icon.set_pixel_size(14);
+    collapse_all_button.set_child(Some(&collapse_all_icon));
+    {
+        let state = state.clone();
+        collapse_all_button.connect_clicked(move |_| {
+            let any_expanded = current_groups(&state).iter().any(|group| !group.collapsed);
+            set_all_repos_collapsed_and_refresh(&state, any_expanded);
+        });
+    }
+    toolbar.append(&collapse_all_button);
 
     let repository_form = build_repository_form_widgets(state);
     let list_host = GtkBox::new(Orientation::Vertical, 0);
@@ -1143,37 +1153,39 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     SidebarWidgets {
         container,
         add_repository_button,
-        collapse_controls,
+        collapse_all_button,
+        collapse_all_icon,
         repository_form,
         scroller,
     }
 }
 
-fn build_collapse_all_button(state: &Rc<AppState>, collapsed: bool) -> Button {
-    let button = Button::new();
-    button.set_valign(Align::Center);
-    button.add_css_class("repo-toggle");
-    button.set_tooltip_text(Some(if collapsed {
-        "Collapse all repositories"
-    } else {
-        "Expand all repositories"
-    }));
-    let icon = Image::from_icon_name(if collapsed {
-        "pan-end-symbolic"
-    } else {
-        "pan-down-symbolic"
-    });
-    icon.set_pixel_size(14);
-    button.set_child(Some(&icon));
+fn sync_collapse_all_button(state: &Rc<AppState>, groups: &[WorkspaceGroup]) {
+    let sidebar_widgets = state
+        .sidebar_widgets
+        .borrow()
+        .as_ref()
+        .cloned()
+        .expect("sidebar widgets initialized");
+    let any_expanded = groups.iter().any(|group| !group.collapsed);
 
-    {
-        let state = state.clone();
-        button.connect_clicked(move |_| {
-            set_all_repos_collapsed_and_refresh(&state, collapsed);
-        });
-    }
-
-    button
+    sidebar_widgets
+        .collapse_all_button
+        .set_visible(!groups.is_empty());
+    sidebar_widgets
+        .collapse_all_button
+        .set_tooltip_text(Some(if any_expanded {
+            "Collapse all repositories"
+        } else {
+            "Expand all repositories"
+        }));
+    sidebar_widgets
+        .collapse_all_icon
+        .set_icon_name(Some(if any_expanded {
+            "pan-down-symbolic"
+        } else {
+            "pan-end-symbolic"
+        }));
 }
 
 fn render_sidebar_content(
@@ -1186,6 +1198,7 @@ fn render_sidebar_content(
 
     let groups_empty = groups.is_empty();
     sync_repository_form_widgets(state, groups_empty);
+    sync_collapse_all_button(state, groups);
     let has_editing_workspace = state.editing_workspace.borrow().is_some();
 
     let list = ListBox::new();
@@ -1450,7 +1463,6 @@ fn sync_repository_form_widgets(state: &Rc<AppState>, groups_empty: bool) {
     sidebar_widgets
         .add_repository_button
         .set_visible(!groups_empty);
-    sidebar_widgets.collapse_controls.set_visible(!groups_empty);
     widgets
         .container
         .set_visible(form_state.expanded || groups_empty);
