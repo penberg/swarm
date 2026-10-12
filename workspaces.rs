@@ -1160,6 +1160,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn setup_script_is_stored_and_cleared() {
+        let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
+        let data_home = unique_temp_path("splay-test-data-home");
+        fs::create_dir_all(&data_home).unwrap();
+        let _env_guard = ScopedEnvVar::set("XDG_DATA_HOME", &data_home);
+
+        let repos = RepositoryStore::open().await.unwrap();
+        repos.add("github/penberg/splay", None).await.unwrap();
+        assert_eq!(repos.setup_script("splay").await.unwrap(), None);
+
+        repos
+            .set_setup_script("splay", "cargo fetch\n")
+            .await
+            .unwrap();
+        assert_eq!(
+            repos.setup_script("splay").await.unwrap().as_deref(),
+            Some("cargo fetch\n")
+        );
+
+        repos.set_setup_script("splay", "  \n").await.unwrap();
+        assert_eq!(repos.setup_script("splay").await.unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn prune_removes_archived_row_when_worktree_is_missing() {
         let _guard = env_lock().lock().unwrap_or_else(|err| err.into_inner());
         let data_home = unique_temp_path("splay-test-data-home");

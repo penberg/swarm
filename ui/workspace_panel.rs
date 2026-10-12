@@ -23,10 +23,11 @@ use crate::{
         workspace_pr_snapshot, workspace_ref,
     },
     data::{
-        Provisioning, SessionEntry, WorkspaceEntry, close_session, create_session,
+        Provisioning, SessionEntry, WorkspaceEntry, WorkspaceGroup, close_session, create_session,
         foreground_program,
     },
     exec, ghostty,
+    repo_settings::build_repository_settings,
 };
 
 #[derive(Clone)]
@@ -215,6 +216,22 @@ impl DetailWidgets {
         }
         sync_session_tab_active_state(&self.session_tabs, Some(&selected_session));
         self.track_session_programs(&workspace.sessions);
+    }
+
+    pub fn render_repository_settings(&self, group: &WorkspaceGroup) {
+        // Keep an open settings page as is, so refreshes do not discard edits.
+        let page_name = format!("settings:{}", group.repo_canonical);
+        if self.session_stack.child_by_name(&page_name).is_some() {
+            return;
+        }
+
+        clear_box(&self.session_toolbar);
+        clear_stack(&self.session_stack);
+        self.track_session_programs(&[]);
+
+        let page = build_repository_settings(group);
+        self.session_stack
+            .add_titled(&page, Some(&page_name), "settings");
     }
 
     fn render_provisioning(&self, workspace: &WorkspaceEntry, provisioning: &Provisioning) {

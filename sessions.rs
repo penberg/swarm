@@ -21,7 +21,7 @@ use turso::{Builder, Connection, Row};
 use crate::{
     SplayError, database_error,
     repos::{Repository, RepositoryStore},
-    sandbox::sandbox,
+    sandbox::{SandboxKind, sandbox},
     toolchains,
     workspaces::{Workspace, WorkspaceStore, migrate_repo_db},
 };
@@ -53,6 +53,16 @@ pub struct Session {
 pub struct SessionStore {
     repos: RepositoryStore,
     workspaces: WorkspaceStore,
+}
+
+/// Command for the session that runs a repository's setup script.
+pub fn setup_session_command(script: &str) -> Vec<String> {
+    vec![
+        "bash".to_string(),
+        "-lc".to_string(),
+        script.to_string(),
+        "setup".to_string(),
+    ]
 }
 
 pub fn default_session_command() -> Vec<String> {
@@ -111,6 +121,28 @@ impl SessionStore {
         self.mark_session_running(&repo, &session).await?;
 
         self.info(&session.id).await
+    }
+
+    /// Starts the sessions a new workspace opens with: the repository's setup
+    /// script on exe.dev, followed by a shell.
+    pub async fn create_initial(&self, workspace: &Workspace) -> Result<Vec<Session>, SplayError> {
+        let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
+        let mut sessions = Vec::new();
+
+        if workspace.sandbox == SandboxKind::ExeDev
+            && let Some(script) = self.repos.setup_script(&workspace.repository).await?
+        {
+            sessions.push(
+                self.create(&workspace_ref, &setup_session_command(&script))
+                    .await?,
+            );
+        }
+
+        sessions.push(
+            self.create(&workspace_ref, &default_session_command())
+                .await?,
+        );
+        Ok(sessions)
     }
 
     pub async fn list(&self, workspace_ref: Option<&str>) -> Result<Vec<Session>, SplayError> {

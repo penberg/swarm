@@ -1,8 +1,8 @@
 use gtk::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
-    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
-    Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow,
-    SelectionMode, Spinner, Widget, gdk,
+    EventControllerKey, EventControllerMotion, GestureClick, Grid, Image, Label, ListBox,
+    ListBoxRow, Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION,
+    ScrolledWindow, SelectionMode, Spinner, Widget, gdk,
     gio::{self, FileMonitor, FileMonitorFlags},
     glib,
     prelude::*,
@@ -227,6 +227,60 @@ window {
   font-weight: 700;
   letter-spacing: 0.02em;
   opacity: 0;
+}
+
+.repo-row-selected .repo-header,
+.repo-title:hover .repo-header {
+  color: #b6dcff;
+}
+
+.repo-settings {
+  padding: 28px 32px 24px 32px;
+}
+
+.repo-settings-title {
+  color: #f3f5f7;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.repo-settings-subtitle {
+  color: #6f7887;
+  font-size: 12px;
+  margin-bottom: 24px;
+}
+
+.repo-settings-heading {
+  color: #c3ccd9;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.repo-settings-description {
+  color: #6f7887;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.repo-settings-script-frame {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+}
+
+.repo-settings-script,
+.repo-settings-script text {
+  background: rgba(255, 255, 255, 0.025);
+  color: #eef4fb;
+}
+
+.repo-settings-actions {
+  margin-top: 14px;
+}
+
+.repo-settings-status {
+  color: #6f7887;
+  font-size: 12px;
 }
 
 .repo-row-hover .repo-status {
@@ -570,6 +624,7 @@ fn build_ui(app: &Application) {
         provisioning_workspaces: RefCell::new(Vec::new()),
         next_provisioning_id: Cell::new(1),
         removing_workspaces: RefCell::new(HashSet::new()),
+        settings_repository: RefCell::new(None),
     });
 
     let sidebar_widgets = build_sidebar_widgets(&state);
@@ -616,6 +671,8 @@ pub struct AppState {
     provisioning_workspaces: RefCell<Vec<WorkspaceEntry>>,
     next_provisioning_id: Cell<u64>,
     removing_workspaces: RefCell<HashSet<String>>,
+    /// Repository whose settings page is open in place of a workspace.
+    settings_repository: RefCell<Option<String>>,
 }
 
 #[derive(Clone)]
@@ -728,16 +785,33 @@ fn render_ui(
     preferred_session: Option<String>,
 ) {
     let groups = &with_provisioning(state, groups);
-    let selected_workspace = preferred_workspace
-        .or_else(|| state.selected_workspace.borrow().clone())
-        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref));
-
     let detail_widgets = state
         .detail_widgets
         .borrow()
         .as_ref()
         .cloned()
         .expect("detail widgets initialized");
+
+    if preferred_workspace.is_some() {
+        *state.settings_repository.borrow_mut() = None;
+    }
+    let settings_group = state
+        .settings_repository
+        .borrow()
+        .as_ref()
+        .and_then(|repo| groups.iter().find(|group| &group.repo_canonical == repo))
+        .cloned();
+    if let Some(group) = settings_group {
+        detail_widgets.render_repository_settings(&group);
+        render_sidebar_content(groups, state, detail_widgets, None);
+        return;
+    }
+    *state.settings_repository.borrow_mut() = None;
+
+    let selected_workspace = preferred_workspace
+        .or_else(|| state.selected_workspace.borrow().clone())
+        .and_then(|workspace_ref| find_workspace_by_ref(groups, &workspace_ref));
+
     if let Some(workspace) = selected_workspace.as_ref() {
         let workspace_ref = workspace_ref(workspace);
         *state.selected_workspace.borrow_mut() = Some(workspace_ref);
@@ -1405,6 +1479,9 @@ fn render_sidebar_content(
             };
 
             if let Some(workspace) = selected_workspace {
+                if state.settings_repository.borrow_mut().take().is_some() {
+                    schedule_render_sidebar_only(&state);
+                }
                 let next_workspace_ref = workspace_ref(&workspace);
                 let preserve_session = state
                     .selected_workspace
@@ -1650,9 +1727,30 @@ fn build_repo_row(
     row.set_spacing(6);
     row.add_css_class("repo-row");
 
+    if state
+        .settings_repository
+        .borrow()
+        .as_deref()
+        .is_some_and(|repo| repo == repo_canonical)
+    {
+        row.add_css_class("repo-row-selected");
+    }
+
     let copy = GtkBox::new(Orientation::Vertical, 0);
     copy.set_hexpand(true);
     copy.set_valign(Align::Center);
+    copy.set_tooltip_text(Some("Repository settings"));
+    copy.add_css_class("repo-title");
+
+    let click = GestureClick::new();
+    {
+        let state = state.clone();
+        let repo_canonical = repo_canonical.to_string();
+        click.connect_released(move |_, _, _, _| {
+            open_repository_settings(&state, &repo_canonical);
+        });
+    }
+    copy.add_controller(click);
 
     let label = Label::new(Some(&repo_label.to_uppercase()));
     label.set_xalign(0.0);
@@ -1759,6 +1857,14 @@ fn build_repo_row(
     row.append(&exedev_button);
     row.append(&toggle_button);
     row
+}
+
+fn open_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
+    *state.settings_repository.borrow_mut() = Some(repo_canonical.to_string());
+    *state.selected_workspace.borrow_mut() = None;
+    *state.editing_workspace.borrow_mut() = None;
+    *state.selected_session.borrow_mut() = None;
+    schedule_render_current_ui(state, None, None);
 }
 
 fn build_new_workspace_button(

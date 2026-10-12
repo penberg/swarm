@@ -162,8 +162,60 @@ impl RepositoryStore {
         ensure_collapsed_column(&conn, &index_db_path).await?;
         ensure_remote_url_column(&conn, &index_db_path).await?;
         ensure_last_used_at_column(&conn, &index_db_path).await?;
+        ensure_setup_script_column(&conn, &index_db_path).await?;
 
         Ok(Self { paths, conn })
+    }
+
+    /// Returns the script that sets up new exe.dev workspaces of `repository`.
+    pub async fn setup_script(&self, repository: &str) -> Result<Option<String>, SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT setup_script
+                 FROM repos
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3",
+            )
+            .await?;
+        let mut rows = stmt
+            .query((repo.host.as_str(), repo.owner.as_str(), repo.name.as_str()))
+            .await?;
+
+        let Some(row) = rows.next().await? else {
+            return Ok(None);
+        };
+        Ok(row
+            .get::<Option<String>>(0)?
+            .filter(|script| !script.trim().is_empty()))
+    }
+
+    /// Sets the setup script of `repository`; an empty script removes it.
+    pub async fn set_setup_script(&self, repository: &str, script: &str) -> Result<(), SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        let script = Some(script).filter(|script| !script.trim().is_empty());
+
+        self.conn
+            .execute(
+                "UPDATE repos
+                 SET setup_script = ?4
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3",
+                (
+                    repo.host.as_str(),
+                    repo.owner.as_str(),
+                    repo.name.as_str(),
+                    script,
+                ),
+            )
+            .await?;
+
+        Ok(())
     }
 
     pub async fn add(
@@ -623,6 +675,18 @@ async fn ensure_last_used_at_column(conn: &Connection, path: &Path) -> Result<()
     conn.execute("ALTER TABLE repos ADD COLUMN last_used_at INTEGER", ())
         .await
         .map_err(|err| database_error(path, "add last_used_at column", err))?;
+
+    Ok(())
+}
+
+async fn ensure_setup_script_column(conn: &Connection, path: &Path) -> Result<(), SplayError> {
+    if has_column(conn, "repos", "setup_script").await? {
+        return Ok(());
+    }
+
+    conn.execute("ALTER TABLE repos ADD COLUMN setup_script TEXT", ())
+        .await
+        .map_err(|err| database_error(path, "add setup_script column", err))?;
 
     Ok(())
 }

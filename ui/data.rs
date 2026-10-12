@@ -159,13 +159,10 @@ pub async fn create_workspace(
     let workspace = workspace_store
         .create(&repository, name.as_deref(), sandbox, &progress)
         .await?;
-    progress("Starting session");
+    progress("Starting sessions");
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-    if let Err(err) = session_store
-        .create(&workspace_ref, &default_session_command())
-        .await
-    {
-        eprintln!("failed to create default session for {workspace_ref}: {err}");
+    if let Err(err) = session_store.create_initial(&workspace).await {
+        eprintln!("failed to create initial sessions for {workspace_ref}: {err}");
     }
     let sessions = session_store
         .list(Some(&workspace_ref))
@@ -182,6 +179,19 @@ pub async fn create_workspace(
         .collect::<Vec<_>>();
 
     Ok(map_workspace(&repo.canonical(), workspace, sessions))
+}
+
+pub async fn load_setup_script(repository: String) -> Result<String, SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    Ok(repo_store
+        .setup_script(&repository)
+        .await?
+        .unwrap_or_default())
+}
+
+pub async fn save_setup_script(repository: String, script: String) -> Result<(), SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.set_setup_script(&repository, &script).await
 }
 
 pub async fn add_repository(

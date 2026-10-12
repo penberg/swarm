@@ -23,16 +23,15 @@ pub async fn run(cmd: WorkspaceCommand) -> Result<(), SplayError> {
                     &|stage| eprintln!("{stage}..."),
                 )
                 .await?;
-            let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
             let session_store = SessionStore::open().await?;
-            let session = session_store
-                .create(&workspace_ref, &default_session_command())
-                .await?;
+            let sessions = session_store.create_initial(&workspace).await?;
             println!(
                 "Created workspace {} for {}",
                 workspace.name, workspace.repository_alias
             );
-            println!("Created session {}", session.id);
+            for session in sessions {
+                println!("Created session {}", session.id);
+            }
         }
         WorkspaceSubcommand::Clone { workspace, name } => {
             let cloned = store.clone(&workspace, &name).await?;
