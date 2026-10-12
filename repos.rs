@@ -366,6 +366,13 @@ impl RepositoryStore {
         self.set_collapsed(repository, false).await
     }
 
+    pub async fn set_all_collapsed(&self, collapsed: bool) -> Result<(), SwarmError> {
+        self.conn
+            .execute("UPDATE repos SET collapsed = ?1", (collapsed,))
+            .await?;
+        Ok(())
+    }
+
     async fn find_repository(&self, repo: &Repository) -> Result<Option<Repository>, SwarmError> {
         let mut stmt = self
             .conn

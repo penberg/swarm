@@ -160,6 +160,11 @@ pub async fn set_repository_collapsed(
     Ok(())
 }
 
+pub async fn set_all_repositories_collapsed(collapsed: bool) -> Result<(), SwarmError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.set_all_collapsed(collapsed).await
+}
+
 pub async fn rename_workspace(
     workspace_ref: String,
     name: String,

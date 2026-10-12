@@ -20,7 +20,8 @@ use crate::{
     data::{
         WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace, create_workspace,
         current_workspace_branch, load_workspace_groups, read_workspace_head, remove_workspace,
-        rename_workspace, set_repository_collapsed, sync_repository, workspace_head_path,
+        rename_workspace, set_all_repositories_collapsed, set_repository_collapsed,
+        sync_repository, workspace_head_path,
     },
     exec,
     workspace_panel::DetailWidgets,
@@ -580,6 +581,7 @@ pub struct AppState {
 struct SidebarWidgets {
     container: GtkBox,
     add_repository_button: Button,
+    collapse_controls: GtkBox,
     repository_form: RepositoryFormWidgets,
     scroller: ScrolledWindow,
 }
@@ -1110,6 +1112,16 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     }
     toolbar.append(&add_repository_button);
 
+    let toolbar_spacer = GtkBox::new(Orientation::Horizontal, 0);
+    toolbar_spacer.set_hexpand(true);
+    toolbar.append(&toolbar_spacer);
+
+    let collapse_controls = GtkBox::new(Orientation::Horizontal, 2);
+    collapse_controls.set_valign(Align::Center);
+    collapse_controls.append(&build_collapse_all_button(state, true));
+    collapse_controls.append(&build_collapse_all_button(state, false));
+    toolbar.append(&collapse_controls);
+
     let repository_form = build_repository_form_widgets(state);
     let list_host = GtkBox::new(Orientation::Vertical, 0);
     list_host.set_hexpand(true);
@@ -1131,9 +1143,37 @@ fn build_sidebar_widgets(state: &Rc<AppState>) -> SidebarWidgets {
     SidebarWidgets {
         container,
         add_repository_button,
+        collapse_controls,
         repository_form,
         scroller,
     }
+}
+
+fn build_collapse_all_button(state: &Rc<AppState>, collapsed: bool) -> Button {
+    let button = Button::new();
+    button.set_valign(Align::Center);
+    button.add_css_class("repo-toggle");
+    button.set_tooltip_text(Some(if collapsed {
+        "Collapse all repositories"
+    } else {
+        "Expand all repositories"
+    }));
+    let icon = Image::from_icon_name(if collapsed {
+        "pan-end-symbolic"
+    } else {
+        "pan-down-symbolic"
+    });
+    icon.set_pixel_size(14);
+    button.set_child(Some(&icon));
+
+    {
+        let state = state.clone();
+        button.connect_clicked(move |_| {
+            set_all_repos_collapsed_and_refresh(&state, collapsed);
+        });
+    }
+
+    button
 }
 
 fn render_sidebar_content(
@@ -1410,6 +1450,7 @@ fn sync_repository_form_widgets(state: &Rc<AppState>, groups_empty: bool) {
     sidebar_widgets
         .add_repository_button
         .set_visible(!groups_empty);
+    sidebar_widgets.collapse_controls.set_visible(!groups_empty);
     widgets
         .container
         .set_visible(form_state.expanded || groups_empty);
@@ -1928,6 +1969,30 @@ fn toggle_repo_collapsed_and_refresh(state: &Rc<AppState>, repo_canonical: &str,
             }
             Err(err) => {
                 eprintln!("failed to toggle repository collapse: {err}");
+                let preferred_workspace = state.selected_workspace.borrow().clone();
+                schedule_render_current_ui(&state, preferred_workspace, None);
+            }
+        },
+    );
+}
+
+fn set_all_repos_collapsed_and_refresh(state: &Rc<AppState>, collapsed: bool) {
+    let state = state.clone();
+    exec::dispatch(
+        set_all_repositories_collapsed(collapsed),
+        move |result| match result {
+            Ok(()) => {
+                let mut next_groups = current_groups(&state);
+                for group in &mut next_groups {
+                    group.collapsed = collapsed;
+                }
+                *state.workspace_groups.borrow_mut() = next_groups.clone();
+                *state.editing_workspace.borrow_mut() = None;
+                *state.selected_session.borrow_mut() = None;
+                schedule_render_current_ui(&state, None, None);
+            }
+            Err(err) => {
+                eprintln!("failed to set collapse state for all repositories: {err}");
                 let preferred_workspace = state.selected_workspace.borrow().clone();
                 schedule_render_current_ui(&state, preferred_workspace, None);
             }
