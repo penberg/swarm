@@ -86,6 +86,13 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SwarmError> 
         });
     }
 
+    groups.sort_by(|left, right| {
+        left.repo_label
+            .to_lowercase()
+            .cmp(&right.repo_label.to_lowercase())
+            .then_with(|| left.repo_canonical.cmp(&right.repo_canonical))
+    });
+
     Ok(groups)
 }
 
