@@ -159,10 +159,10 @@ pub async fn create_workspace(
     let workspace = workspace_store
         .create(&repository, name.as_deref(), sandbox, &progress)
         .await?;
-    progress("Starting sessions");
+    progress("Starting session");
     let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
     if let Err(err) = session_store.create_initial(&workspace).await {
-        eprintln!("failed to create initial sessions for {workspace_ref}: {err}");
+        eprintln!("failed to create initial session for {workspace_ref}: {err}");
     }
     let sessions = session_store
         .list(Some(&workspace_ref))

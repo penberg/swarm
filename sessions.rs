@@ -55,13 +55,18 @@ pub struct SessionStore {
     workspaces: WorkspaceStore,
 }
 
-/// Command for the session that runs a repository's setup script.
+/// Command for a session that runs a repository's setup script and then a
+/// login shell. The script runs in its own bash, so `set -e` or `exit` in it
+/// end only the setup, and the shell starts after the script, so it sees
+/// whatever the script installed.
 pub fn setup_session_command(script: &str) -> Vec<String> {
     vec![
         "bash".to_string(),
         "-lc".to_string(),
+        r#"bash -lc "$1" setup; printf '\n[setup exited with status %s]\n\n' "$?"; exec "$SHELL" -l"#
+            .to_string(),
+        "splay".to_string(),
         script.to_string(),
-        "setup".to_string(),
     ]
 }
 
@@ -123,26 +128,21 @@ impl SessionStore {
         self.info(&session.id).await
     }
 
-    /// Starts the sessions a new workspace opens with: the repository's setup
-    /// script on exe.dev, followed by a shell.
-    pub async fn create_initial(&self, workspace: &Workspace) -> Result<Vec<Session>, SplayError> {
+    /// Starts the session a new workspace opens with: a shell, preceded by
+    /// the repository's setup script on exe.dev.
+    pub async fn create_initial(&self, workspace: &Workspace) -> Result<Session, SplayError> {
         let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-        let mut sessions = Vec::new();
+        let setup_script = if workspace.sandbox == SandboxKind::ExeDev {
+            self.repos.setup_script(&workspace.repository).await?
+        } else {
+            None
+        };
+        let command = match setup_script {
+            Some(script) => setup_session_command(&script),
+            None => default_session_command(),
+        };
 
-        if workspace.sandbox == SandboxKind::ExeDev
-            && let Some(script) = self.repos.setup_script(&workspace.repository).await?
-        {
-            sessions.push(
-                self.create(&workspace_ref, &setup_session_command(&script))
-                    .await?,
-            );
-        }
-
-        sessions.push(
-            self.create(&workspace_ref, &default_session_command())
-                .await?,
-        );
-        Ok(sessions)
+        self.create(&workspace_ref, &command).await
     }
 
     pub async fn list(&self, workspace_ref: Option<&str>) -> Result<Vec<Session>, SplayError> {
