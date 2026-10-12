@@ -5,12 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-12
+
+Swarm is now Splay. The binaries are `splay` and `splayctl`, and existing
+state moves over automatically on first start.
+
+### Added
+
+- Collapse or expand all repositories with one sidebar toggle. ([#71](https://github.com/splay-sh/splay/pull/71))
+- Name the workspace in the empty terminal placeholder. ([#71](https://github.com/splay-sh/splay/pull/71))
 
 ### Changed
 
 - Rename the project from Swarm to Splay. The binaries are now `splay` and `splayctl`, and the GTK application ID is `com.penberg.splay.ui`.
-- Move state from `~/.local/share/swarm` to `~/.local/share/splay` automatically on first start, rewriting stored paths and repairing git worktrees.
+- Move state from `~/.local/share/swarm` to `~/.local/share/splay` automatically on first start, rewriting stored paths and repairing git worktrees. Stop running Swarm sessions before upgrading.
+- New app icon: the four-pane Splay tile.
+- Sort sidebar repositories by name. ([#71](https://github.com/splay-sh/splay/pull/71))
+- Fold repositories and workspaces not used in the last 7 days behind expanders, and list workspaces newest first. `splayctl workspace list` also prints newest first. ([#71](https://github.com/splay-sh/splay/pull/71))
+- Do not select a workspace by default at startup or after removing the selected one. ([#71](https://github.com/splay-sh/splay/pull/71))
+- Run UI actions such as creating and closing terminals, creating workspaces, syncing repositories and looking up pull requests off the GTK main thread, so the window stays responsive. ([#70](https://github.com/splay-sh/splay/pull/70))
+- Link `libghostty-vt` statically from upstream instead of a vendored copy. ([#56](https://github.com/splay-sh/splay/pull/56))
+
+### Fixed
+
+- Update pull request status indicators in place instead of rebuilding the sidebar, which made it flicker. ([#71](https://github.com/splay-sh/splay/pull/71))
+- Clean up archived workspaces whose worktree git no longer recognizes, instead of failing to prune.
+- Report which workspaces could not be pruned and why, and keep pruning the rest.
+- Launch the installed `splay` binary from the desktop entry.
 
 ## [0.1.5] - 2026-04-22
 
