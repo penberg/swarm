@@ -383,10 +383,6 @@ window {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
-.settings-editor-card {
-  margin-bottom: 0;
-}
-
 .settings-editor-header {
   padding: 9px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);

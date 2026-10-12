@@ -47,17 +47,16 @@ pub fn build_repository_settings(state: &Rc<AppState>, group: &WorkspaceGroup) -
     let setup_revealer = Revealer::new();
     setup_revealer.set_transition_type(RevealerTransitionType::SlideDown);
     setup_revealer.set_transition_duration(180);
-    setup_revealer.set_vexpand(true);
     setup_revealer.set_child(Some(&setup));
     setup_revealer.set_reveal_child(!group.remote_sandboxes.is_empty());
 
-    page.append(&section_heading("Git repository"));
-    page.append(&build_repository_card(group));
     page.append(&section_heading("Integrations"));
     page.append(&build_integrations_card(state, group, &setup_revealer));
     page.append(&setup_revealer);
+    page.append(&section_heading("Git repository"));
+    page.append(&build_repository_card(group));
 
-    // Scroll when the window is short; otherwise the editor takes the spare height.
+    // Scroll when the window is too short for the page.
     let scroller = ScrolledWindow::new();
     scroller.set_policy(PolicyType::Never, PolicyType::Automatic);
     scroller.set_hexpand(true);
@@ -327,7 +326,6 @@ fn buffer_text(buffer: &TextBuffer) -> String {
 
 fn build_setup_script_section(repository: &str) -> GtkBox {
     let section = GtkBox::new(Orientation::Vertical, 0);
-    section.set_vexpand(true);
 
     section.append(&section_heading("Sandbox setup script"));
 
@@ -342,9 +340,7 @@ fn build_setup_script_section(repository: &str) -> GtkBox {
     section.append(&description);
 
     let card = GtkBox::new(Orientation::Vertical, 0);
-    card.set_vexpand(true);
     card.add_css_class("settings-card");
-    card.add_css_class("settings-editor-card");
 
     let header = GtkBox::new(Orientation::Horizontal, 8);
     header.add_css_class("settings-editor-header");
@@ -371,8 +367,7 @@ fn build_setup_script_section(repository: &str) -> GtkBox {
 
     let scroller = ScrolledWindow::new();
     scroller.set_policy(PolicyType::Automatic, PolicyType::Automatic);
-    scroller.set_vexpand(true);
-    scroller.set_min_content_height(180);
+    scroller.set_min_content_height(280);
     scroller.set_child(Some(&editor));
     card.append(&scroller);
 
