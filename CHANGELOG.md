@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Archive a repository from its "…" menu or with `splayctl repo archive`, hiding it from the sidebar while keeping its workspaces and files. `splayctl repo unarchive` brings it back. ([#78](https://github.com/splay-sh/splay/pull/78))
+
 ### Changed
 
 - Show the selected repository, workspace and branch in the window title. ([#76](https://github.com/splay-sh/splay/pull/76))
