@@ -1,6 +1,6 @@
 use gtk::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
-    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
+    EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow, MenuButton,
     Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow,
     SelectionMode, Settings, Spinner, Widget, gdk,
     gio::{self, FileMonitor, FileMonitorFlags},
@@ -182,26 +182,6 @@ headerbar:backdrop {
   color: #e7f3ff;
 }
 
-.repo-sync {
-  min-width: 24px;
-  min-height: 24px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  color: #7a8698;
-}
-
-.repo-sync:hover {
-  background: rgba(126, 203, 255, 0.08);
-  color: #e7f3ff;
-}
-
-.repo-sync:disabled {
-  color: #a9d8ff;
-  opacity: 1;
-}
-
 .sidebar-more {
   min-height: 24px;
   margin-top: 14px;
@@ -239,18 +219,27 @@ headerbar:backdrop {
   opacity: 0;
 }
 
-.repo-row-selected .repo-header {
-  color: #b6dcff;
-}
-
-.repo-template-spinner {
+.repo-spinner {
   min-width: 14px;
   min-height: 14px;
   -gtk-icon-size: 14px;
 }
 
-.repo-row-selected .repo-settings-button {
-  color: #b6dcff;
+.repo-menu > button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  box-shadow: none;
+  color: #7a8698;
+}
+
+.repo-menu > button:hover,
+.repo-menu > button:checked {
+  background: rgba(126, 203, 255, 0.08);
+  color: #e7f3ff;
 }
 
 .repo-settings {
@@ -1994,15 +1983,6 @@ fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool
     row.set_spacing(6);
     row.add_css_class("repo-row");
 
-    let settings_open = state
-        .settings_repository
-        .borrow()
-        .as_deref()
-        .is_some_and(|repo| repo == repo_canonical);
-    if settings_open {
-        row.add_css_class("repo-row-selected");
-    }
-
     let copy = GtkBox::new(Orientation::Vertical, 0);
     copy.set_hexpand(true);
     copy.set_valign(Align::Center);
@@ -2035,54 +2015,6 @@ fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool
         row.append(&meta);
     }
 
-    let sync_button = Button::new();
-    sync_button.set_valign(Align::Center);
-    sync_button.add_css_class("repo-sync");
-    sync_button.set_sensitive(!is_syncing);
-    sync_button.set_tooltip_text(Some(if is_syncing {
-        "Syncing ..."
-    } else {
-        "Sync repository"
-    }));
-    if is_syncing {
-        let spinner = Spinner::new();
-        spinner.start();
-        sync_button.set_child(Some(&spinner));
-    } else {
-        let sync_icon = Image::from_icon_name("view-refresh-symbolic");
-        sync_icon.set_pixel_size(14);
-        sync_button.set_child(Some(&sync_icon));
-    }
-
-    {
-        let state = state.clone();
-        let repo_canonical = repo_canonical.to_string();
-        sync_button.connect_clicked(move |_| {
-            sync_repo_and_refresh(&state, &repo_canonical);
-        });
-    }
-
-    let settings_button = Button::new();
-    settings_button.set_valign(Align::Center);
-    settings_button.add_css_class("repo-sync");
-    settings_button.add_css_class("repo-settings-button");
-    settings_button.set_tooltip_text(Some(if settings_open {
-        "Close repository settings"
-    } else {
-        "Repository settings"
-    }));
-    let settings_icon = Image::from_icon_name("emblem-system-symbolic");
-    settings_icon.set_pixel_size(14);
-    settings_button.set_child(Some(&settings_icon));
-
-    {
-        let state = state.clone();
-        let repo_canonical = repo_canonical.to_string();
-        settings_button.connect_clicked(move |_| {
-            toggle_repository_settings(&state, &repo_canonical);
-        });
-    }
-
     let is_creating = state.creating_workspaces.borrow().contains(repo_canonical);
     let new_workspace_buttons = [SandboxKind::Local]
         .iter()
@@ -2097,6 +2029,7 @@ fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool
             )
         })
         .collect::<Vec<_>>();
+    let menu_button = build_repo_menu(state, repo_canonical, is_syncing);
 
     let toggle_button = Button::new();
     toggle_button.set_valign(Align::Center);
@@ -2137,11 +2070,10 @@ fn build_repo_row(state: &Rc<AppState>, group: &WorkspaceGroup, is_syncing: bool
     }
     row.add_controller(hover);
 
-    row.append(&settings_button);
-    row.append(&sync_button);
     for button in &new_workspace_buttons {
         row.append(button);
     }
+    row.append(&menu_button);
     row.append(&toggle_button);
     row
 }
@@ -2231,14 +2163,8 @@ fn poll_building_templates(state: &Rc<AppState>) {
     });
 }
 
-fn toggle_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
-    let mut settings_repository = state.settings_repository.borrow_mut();
-    if settings_repository.as_deref() == Some(repo_canonical) {
-        *settings_repository = None;
-    } else {
-        *settings_repository = Some(repo_canonical.to_string());
-    }
-    drop(settings_repository);
+fn open_repository_settings(state: &Rc<AppState>, repo_canonical: &str) {
+    *state.settings_repository.borrow_mut() = Some(repo_canonical.to_string());
     *state.selected_workspace.borrow_mut() = None;
     *state.editing_workspace.borrow_mut() = None;
     *state.selected_session.borrow_mut() = None;
@@ -2288,7 +2214,7 @@ fn build_new_workspace_button(
     button.set_tooltip_text(Some(&tooltip));
     if building {
         let spinner = Spinner::new();
-        spinner.add_css_class("repo-template-spinner");
+        spinner.add_css_class("repo-spinner");
         spinner.start();
         button.set_child(Some(&spinner));
     } else {
@@ -2302,6 +2228,54 @@ fn build_new_workspace_button(
     button.connect_clicked(move |_| {
         create_and_edit_workspace(&state, &repo_canonical, sandbox);
     });
+    button
+}
+
+/// Builds the "…" menu of a repository row, with its sync and settings
+/// actions.
+fn build_repo_menu(state: &Rc<AppState>, repo_canonical: &str, is_syncing: bool) -> MenuButton {
+    let actions = gio::SimpleActionGroup::new();
+
+    let sync_action = gio::SimpleAction::new("sync", None);
+    sync_action.set_enabled(!is_syncing);
+    {
+        let state = state.clone();
+        let repo_canonical = repo_canonical.to_string();
+        sync_action.connect_activate(move |_, _| {
+            sync_repo_and_refresh(&state, &repo_canonical);
+        });
+    }
+    actions.add_action(&sync_action);
+
+    let settings_action = gio::SimpleAction::new("settings", None);
+    {
+        let state = state.clone();
+        let repo_canonical = repo_canonical.to_string();
+        settings_action.connect_activate(move |_, _| {
+            open_repository_settings(&state, &repo_canonical);
+        });
+    }
+    actions.add_action(&settings_action);
+
+    let menu = gio::Menu::new();
+    menu.append(Some("Sync"), Some("repo.sync"));
+    menu.append(Some("Settings"), Some("repo.settings"));
+
+    let button = MenuButton::new();
+    button.set_valign(Align::Center);
+    button.add_css_class("repo-menu");
+    button.set_menu_model(Some(&menu));
+    button.insert_action_group("repo", Some(&actions));
+    if is_syncing {
+        let spinner = Spinner::new();
+        spinner.add_css_class("repo-spinner");
+        spinner.start();
+        button.set_child(Some(&spinner));
+        button.set_tooltip_text(Some("Syncing ..."));
+    } else {
+        button.set_icon_name("view-more-symbolic");
+        button.set_tooltip_text(Some("Repository actions"));
+    }
     button
 }
 

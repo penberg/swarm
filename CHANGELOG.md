@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Show the selected repository, workspace and branch in the window title. ([#76](https://github.com/splay-sh/splay/pull/76))
+- Move repository sync and settings into a "…" menu on the repository row, and stop highlighting the row while its settings are open. ([#77](https://github.com/splay-sh/splay/pull/77))
 
 ### Fixed
 
