@@ -39,6 +39,14 @@ pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
             let repo = store.remove(&repository).await?;
             println!("Removed repo {}", repo.alias.as_deref().unwrap_or("-"));
         }
+        RepoSubcommand::Archive { repository } => {
+            let repo = store.archive(&repository).await?;
+            println!("Archived repo {}", repo.alias.as_deref().unwrap_or("-"));
+        }
+        RepoSubcommand::Unarchive { repository } => {
+            let repo = store.unarchive(&repository).await?;
+            println!("Unarchived repo {}", repo.alias.as_deref().unwrap_or("-"));
+        }
         RepoSubcommand::List { json } => {
             let repos = store.list().await?;
 
@@ -50,9 +58,14 @@ pub async fn run(cmd: RepoCommand) -> Result<(), SplayError> {
             println!("{:<16} REPOSITORY", "ALIAS");
             for repo in repos {
                 println!(
-                    "{:<16} {}",
+                    "{:<16} {}{}",
                     repo.alias.as_deref().unwrap_or("-"),
-                    repo.canonical()
+                    repo.canonical(),
+                    if repo.archived_at.is_some() {
+                        " (archived)"
+                    } else {
+                        ""
+                    }
                 );
             }
         }

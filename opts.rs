@@ -36,6 +36,14 @@ pub enum RepoSubcommand {
     Remove {
         repository: String,
     },
+    /// Hide a repository from the sidebar, keeping its workspaces and files.
+    Archive {
+        repository: String,
+    },
+    /// Show an archived repository in the sidebar again.
+    Unarchive {
+        repository: String,
+    },
     List {
         #[arg(long)]
         json: bool,
