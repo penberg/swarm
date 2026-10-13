@@ -82,7 +82,12 @@ pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> 
     let repo_store = RepositoryStore::open().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
-    let repos = repo_store.list().await?;
+    let repos = repo_store
+        .list()
+        .await?
+        .into_iter()
+        .filter(|repo| repo.archived_at.is_none())
+        .collect::<Vec<_>>();
     let mut groups = Vec::with_capacity(repos.len());
     let recently_used_since = unix_now() - RECENTLY_USED_WINDOW.as_secs() as i64;
 
@@ -326,6 +331,12 @@ pub async fn add_repository(
 pub async fn sync_repository(repository: String) -> Result<(), SplayError> {
     let repo_store = RepositoryStore::open().await?;
     repo_store.sync(&repository).await?;
+    Ok(())
+}
+
+pub async fn archive_repository(repository: String) -> Result<(), SplayError> {
+    let repo_store = RepositoryStore::open().await?;
+    repo_store.archive(&repository).await?;
     Ok(())
 }
 

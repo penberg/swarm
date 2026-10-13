@@ -20,6 +20,8 @@ pub struct Repository {
     pub remote_url: Option<String>,
     pub collapsed: bool,
     pub last_used_at: Option<i64>,
+    /// When the repository was archived, hiding it from the sidebar.
+    pub archived_at: Option<i64>,
 }
 
 impl Repository {
@@ -46,6 +48,7 @@ impl Repository {
             remote_url,
             collapsed: false,
             last_used_at: None,
+            archived_at: None,
         })
     }
 
@@ -171,6 +174,7 @@ impl RepositoryStore {
         ensure_remote_url_column(&conn, &index_db_path).await?;
         ensure_last_used_at_column(&conn, &index_db_path).await?;
         ensure_setup_script_column(&conn, &index_db_path).await?;
+        ensure_archived_at_column(&conn, &index_db_path).await?;
 
         Ok(Self { paths, conn })
     }
@@ -367,7 +371,7 @@ impl RepositoryStore {
             .conn
             .prepare(
                 "SELECT host, owner, name, alias, collapsed
-                 , remote_url, last_used_at
+                 , remote_url, last_used_at, archived_at
                  FROM repos
                  ORDER BY host, owner, name",
             )
@@ -384,6 +388,7 @@ impl RepositoryStore {
                 collapsed: row.get::<i64>(4)? != 0,
                 remote_url: row.get::<Option<String>>(5)?,
                 last_used_at: row.get::<Option<i64>>(6)?,
+                archived_at: row.get::<Option<i64>>(7)?,
             });
         }
 
@@ -537,6 +542,17 @@ impl RepositoryStore {
         self.set_collapsed(repository, false).await
     }
 
+    /// Archives a repository, hiding it from the sidebar. Its workspaces,
+    /// sessions and files are kept.
+    pub async fn archive(&self, repository: &str) -> Result<Repository, SplayError> {
+        self.set_archived_at(repository, Some(unix_timestamp()))
+            .await
+    }
+
+    pub async fn unarchive(&self, repository: &str) -> Result<Repository, SplayError> {
+        self.set_archived_at(repository, None).await
+    }
+
     pub async fn set_all_collapsed(&self, collapsed: bool) -> Result<(), SplayError> {
         self.conn
             .execute("UPDATE repos SET collapsed = ?1", (collapsed,))
@@ -623,7 +639,7 @@ impl RepositoryStore {
             .conn
             .prepare(
                 "SELECT host, owner, name, alias, collapsed
-                 , remote_url, last_used_at
+                 , remote_url, last_used_at, archived_at
                  FROM repos
                  WHERE host = ?1 AND owner = ?2 AND name = ?3",
             )
@@ -641,6 +657,7 @@ impl RepositoryStore {
                 collapsed: row.get::<i64>(4)? != 0,
                 remote_url: row.get::<Option<String>>(5)?,
                 last_used_at: row.get::<Option<i64>>(6)?,
+                archived_at: row.get::<Option<i64>>(7)?,
             }));
         }
 
@@ -672,6 +689,7 @@ impl RepositoryStore {
                     remote_url: None,
                     collapsed: false,
                     last_used_at: None,
+                    archived_at: None,
                 })
                 .await;
         }
@@ -684,7 +702,7 @@ impl RepositoryStore {
             .conn
             .prepare(
                 "SELECT host, owner, name, alias, collapsed
-                 , remote_url, last_used_at
+                 , remote_url, last_used_at, archived_at
                  FROM repos
                  WHERE alias = ?1
                  LIMIT 1",
@@ -701,6 +719,7 @@ impl RepositoryStore {
                 collapsed: row.get::<i64>(4)? != 0,
                 remote_url: row.get::<Option<String>>(5)?,
                 last_used_at: row.get::<Option<i64>>(6)?,
+                archived_at: row.get::<Option<i64>>(7)?,
             }));
         }
 
@@ -732,6 +751,36 @@ impl RepositoryStore {
             .await?;
 
         Ok(Repository { collapsed, ..repo })
+    }
+
+    async fn set_archived_at(
+        &self,
+        repository: &str,
+        archived_at: Option<i64>,
+    ) -> Result<Repository, SplayError> {
+        let repo = self
+            .resolve(repository)
+            .await?
+            .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+
+        self.conn
+            .execute(
+                "UPDATE repos
+                 SET archived_at = ?4
+                 WHERE host = ?1 AND owner = ?2 AND name = ?3",
+                (
+                    repo.host.as_str(),
+                    repo.owner.as_str(),
+                    repo.name.as_str(),
+                    archived_at,
+                ),
+            )
+            .await?;
+
+        Ok(Repository {
+            archived_at,
+            ..repo
+        })
     }
 }
 
@@ -787,6 +836,18 @@ async fn ensure_last_used_at_column(conn: &Connection, path: &Path) -> Result<()
     conn.execute("ALTER TABLE repos ADD COLUMN last_used_at INTEGER", ())
         .await
         .map_err(|err| database_error(path, "add last_used_at column", err))?;
+
+    Ok(())
+}
+
+async fn ensure_archived_at_column(conn: &Connection, path: &Path) -> Result<(), SplayError> {
+    if has_column(conn, "repos", "archived_at").await? {
+        return Ok(());
+    }
+
+    conn.execute("ALTER TABLE repos ADD COLUMN archived_at INTEGER", ())
+        .await
+        .map_err(|err| database_error(path, "add archived_at column", err))?;
 
     Ok(())
 }
@@ -1005,6 +1066,7 @@ mod tests {
             remote_url: None,
             collapsed: false,
             last_used_at: None,
+            archived_at: None,
         };
 
         assert_eq!(repo.remote_url(), "https://github.com/penberg/splay.git");

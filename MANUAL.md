@@ -18,6 +18,7 @@ Example: `github.com/splay-sh/splay`
 - register a repository with `splay`
 - sync a repository's local bare clone from the remote
 - remove a repository from `splay`
+- archive a repository to hide it from the sidebar, and unarchive it
 - list repositories known to `splay`
 
 Repository commands do not create workspaces or sessions.
@@ -95,6 +96,7 @@ Stores one row per repository:
 - `alias`
 - `created_at`
 - `last_used_at`: Unix timestamp of when the repository was added or one of its workspaces was last selected in the UI, or `NULL`.
+- `archived_at`: Unix timestamp of when the repository was archived, or `NULL`.
 
 Canonical identity: the `(host, owner, name)` tuple. Aliases are shortcuts, not primary identifiers.
 
@@ -535,7 +537,7 @@ splay repo list --json
 #### Behavior
 
 - Reads repository records from `index.db`.
-- Prints one repository per row.
+- Prints one repository per row, including archived repositories, which are marked `(archived)`.
 
 #### Examples
 
@@ -615,6 +617,59 @@ splay repo remove github.com/splay-sh/splay
 
 ```text
 Removed repo splay
+```
+
+### `splay repo archive`
+
+Archive a repository. Archived repositories are not shown in the sidebar.
+
+#### Usage
+
+```text
+splay repo archive <repository>
+```
+
+#### Arguments
+
+- `<repository>`: Repository alias or canonical `host/owner/name`.
+
+#### Behavior
+
+- Resolves the repository by alias first, then by canonical identifier.
+- Sets `archived_at` in `index.db`.
+- Keeps the repository directory, workspaces and sessions.
+
+The repository menu in the sidebar has the same action.
+
+#### Expected Output
+
+```text
+Archived repo splay
+```
+
+### `splay repo unarchive`
+
+Unarchive a repository, showing it in the sidebar again.
+
+#### Usage
+
+```text
+splay repo unarchive <repository>
+```
+
+#### Arguments
+
+- `<repository>`: Repository alias or canonical `host/owner/name`.
+
+#### Behavior
+
+- Resolves the repository by alias first, then by canonical identifier.
+- Clears `archived_at` in `index.db`.
+
+#### Expected Output
+
+```text
+Unarchived repo splay
 ```
 
 ## Exit Codes

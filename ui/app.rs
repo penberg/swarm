@@ -24,11 +24,11 @@ use tokio::sync::mpsc;
 
 use crate::{
     data::{
-        Provisioning, WorkspaceEntry, WorkspaceGroup, add_repository, clone_workspace,
-        create_workspace, current_workspace_branch, load_template_statuses, load_workspace_groups,
-        mark_workspace_used, read_workspace_head, remove_workspace, rename_workspace,
-        set_all_repositories_collapsed, set_repository_collapsed, sync_repository,
-        workspace_head_path,
+        Provisioning, WorkspaceEntry, WorkspaceGroup, add_repository, archive_repository,
+        clone_workspace, create_workspace, current_workspace_branch, load_template_statuses,
+        load_workspace_groups, mark_workspace_used, read_workspace_head, remove_workspace,
+        rename_workspace, set_all_repositories_collapsed, set_repository_collapsed,
+        sync_repository, workspace_head_path,
     },
     exec,
     workspace_panel::{APP_TITLE, DetailWidgets},
@@ -886,6 +886,7 @@ fn build_ui(app: &Application) {
         provisioning_workspaces: RefCell::new(Vec::new()),
         next_provisioning_id: Cell::new(1),
         removing_workspaces: RefCell::new(HashSet::new()),
+        archiving_repositories: RefCell::new(HashSet::new()),
         settings_repository: RefCell::new(None),
         polling_templates: Cell::new(false),
     });
@@ -935,6 +936,8 @@ pub struct AppState {
     provisioning_workspaces: RefCell<Vec<WorkspaceEntry>>,
     next_provisioning_id: Cell<u64>,
     removing_workspaces: RefCell<HashSet<String>>,
+    /// Repositories hidden from the sidebar while they are being archived.
+    archiving_repositories: RefCell<HashSet<String>>,
     /// Repository whose settings page is open in place of a workspace.
     settings_repository: RefCell<Option<String>>,
     /// Whether a template status refresh is in flight.
@@ -1107,9 +1110,11 @@ pub fn current_groups(state: &Rc<AppState>) -> Vec<WorkspaceGroup> {
 }
 
 /// Returns `groups` with the workspaces being created listed first in their
-/// repositories, newest first.
+/// repositories, newest first, and without the repositories being archived.
 fn with_provisioning(state: &Rc<AppState>, groups: &[WorkspaceGroup]) -> Vec<WorkspaceGroup> {
     let mut groups = groups.to_vec();
+    let archiving = state.archiving_repositories.borrow();
+    groups.retain(|group| !archiving.contains(&group.repo_canonical));
     for workspace in state.provisioning_workspaces.borrow().iter() {
         if let Some(group) = groups
             .iter_mut()
@@ -2257,9 +2262,22 @@ fn build_repo_menu(state: &Rc<AppState>, repo_canonical: &str, is_syncing: bool)
     }
     actions.add_action(&settings_action);
 
+    let archive_action = gio::SimpleAction::new("archive", None);
+    {
+        let state = state.clone();
+        let repo_canonical = repo_canonical.to_string();
+        archive_action.connect_activate(move |_, _| {
+            archive_repository_and_refresh(&state, &repo_canonical);
+        });
+    }
+    actions.add_action(&archive_action);
+
     let menu = gio::Menu::new();
     menu.append(Some("Sync"), Some("repo.sync"));
     menu.append(Some("Settings"), Some("repo.settings"));
+    let archive_section = gio::Menu::new();
+    archive_section.append(Some("Archive"), Some("repo.archive"));
+    menu.append_section(None, &archive_section);
 
     let button = MenuButton::new();
     button.set_valign(Align::Center);
@@ -2800,6 +2818,33 @@ fn mark_used(workspace: &WorkspaceEntry) {
             }
         },
     );
+}
+
+/// Archives a repository. It is dropped from the sidebar right away, along
+/// with its workspace or settings page if one is open, and comes back if
+/// archiving fails.
+fn archive_repository_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
+    if !state
+        .archiving_repositories
+        .borrow_mut()
+        .insert(repo_canonical.to_string())
+    {
+        return;
+    }
+    schedule_render_current_ui(state, None, None);
+
+    let state = state.clone();
+    let repo_canonical = repo_canonical.to_string();
+    exec::dispatch(archive_repository(repo_canonical.clone()), move |result| {
+        state
+            .archiving_repositories
+            .borrow_mut()
+            .remove(&repo_canonical);
+        if let Err(err) = result {
+            eprintln!("failed to archive repository: {err}");
+        }
+        schedule_refresh(&state, None, None);
+    });
 }
 
 fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
