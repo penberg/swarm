@@ -2,7 +2,7 @@ use gtk::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
     EventControllerKey, EventControllerMotion, Grid, Image, Label, ListBox, ListBoxRow,
     Orientation, PolicyType, PropagationPhase, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow,
-    SelectionMode, Spinner, Widget, gdk,
+    SelectionMode, Settings, Spinner, Widget, gdk,
     gio::{self, FileMonitor, FileMonitorFlags},
     glib,
     prelude::*,
@@ -46,6 +46,14 @@ const LOADING_PR_STATUS_TTL: Duration = Duration::from_secs(10);
 const STYLE: &str = r#"
 window {
   background: #0f1115;
+}
+
+headerbar,
+headerbar:backdrop {
+  background: #0a0d12;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+  color: #7f8b9d;
 }
 
 .app-shell {
@@ -844,6 +852,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn build_ui(app: &Application) {
+    // The stylesheet paints a dark UI and the title bar, but GTK draws
+    // popovers, tooltips and the window buttons from its own theme, which
+    // defaults to light.
+    if let Some(settings) = Settings::default() {
+        settings.set_gtk_application_prefer_dark_theme(true);
+    }
     install_css();
 
     let window = ApplicationWindow::builder()
