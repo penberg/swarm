@@ -31,7 +31,7 @@ use crate::{
         workspace_head_path,
     },
     exec,
-    workspace_panel::DetailWidgets,
+    workspace_panel::{APP_TITLE, DetailWidgets},
 };
 
 const APP_ID: &str = "com.penberg.splay.ui";
@@ -862,7 +862,7 @@ fn build_ui(app: &Application) {
 
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("splay")
+        .title(APP_TITLE)
         .default_width(1480)
         .default_height(920)
         .build();
