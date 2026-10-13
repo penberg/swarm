@@ -900,6 +900,9 @@ fn build_ui(app: &Application) {
     *state.sidebar_widgets.borrow_mut() = Some(sidebar_widgets);
 
     let detail_widgets = DetailWidgets::new(&state);
+    // Nothing is selected at startup, so the placeholder does not need to
+    // wait for the repositories to load.
+    detail_widgets.render_empty();
     let content = build_content(detail_widgets.container.clone());
     *state.detail_widgets.borrow_mut() = Some(detail_widgets);
     content_host.append(&content);
