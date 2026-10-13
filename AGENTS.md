@@ -9,3 +9,7 @@
   - top-level CLI parsing in `opts.rs`
   - command handlers in `cmd/`
   - storage and domain logic in top-level modules such as `repos.rs`
+
+## Commits
+
+- Do not update `CHANGELOG.md` in commits. It is updated at release time.
