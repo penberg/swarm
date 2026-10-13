@@ -2642,6 +2642,7 @@ fn create_and_edit_workspace(state: &Rc<AppState>, repo_canonical: &str, sandbox
     };
     let placeholder_ref = workspace_ref(&placeholder);
     state.provisioning_workspaces.borrow_mut().push(placeholder);
+    expand_repository(state, repo_canonical);
     *state.selected_workspace.borrow_mut() = Some(placeholder_ref.clone());
     schedule_render_current_ui(state, Some(placeholder_ref.clone()), None);
 
@@ -2905,6 +2906,29 @@ fn sync_repo_and_refresh(state: &Rc<AppState>, repo_canonical: &str) {
         }
         schedule_refresh(&state, preferred_workspace, preferred_session);
     });
+}
+
+/// Expands a collapsed repository, so that a workspace created in it is
+/// visible.
+fn expand_repository(state: &Rc<AppState>, repo_canonical: &str) {
+    let mut groups = state.workspace_groups.borrow_mut();
+    let Some(group) = groups
+        .iter_mut()
+        .find(|group| group.repo_canonical == repo_canonical && group.collapsed)
+    else {
+        return;
+    };
+    group.collapsed = false;
+    drop(groups);
+
+    exec::dispatch(
+        set_repository_collapsed(repo_canonical.to_string(), false),
+        |result| {
+            if let Err(err) = result {
+                eprintln!("failed to expand repository: {err}");
+            }
+        },
+    );
 }
 
 fn toggle_repo_collapsed_and_refresh(state: &Rc<AppState>, repo_canonical: &str, collapsed: bool) {
