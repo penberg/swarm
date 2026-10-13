@@ -5,7 +5,7 @@
 <h1 align="center">Splay</h1>
 <p align="center"><em>Fan out your agents.</em></p>
 
-Splay is a workspace manager for parallel coding agent development, similar to [cmux](https://github.com/manaflow-ai/cmux), [Superset](https://github.com/superset-sh/superset), and [Conductor](https://www.conductor.build/). Register git repositories, spin up isolated worktrees, and run persistent terminal sessions inside them from a native GTK desktop app or the CLI.
+Splay is a workspace manager for parallel coding agent development, similar to [cmux](https://github.com/manaflow-ai/cmux), [Superset](https://github.com/superset-sh/superset), [Conductor](https://www.conductor.build/), and [Orca](https://github.com/stablyai/orca). Register git repositories, spin up isolated worktrees, and run persistent terminal sessions inside them from a native GTK desktop app or the CLI.
 
 Splay was previously called Swarm. Read the [announcement blog post](https://penberg.org/blog/swarm.html) for more background.
 
@@ -63,11 +63,17 @@ For example, a typical **workspace-per-feature** workflow looks like this: creat
 
 ### How is Splay different from _X_?
 
-[Superset](https://github.com/superset-sh/superset) is a macOS desktop app for running multiple CLI coding agents in parallel across git worktrees. Unlike Splay, it ships with a built-in diff viewer, editor, and terminal, supports one-click handoff to external editors, and requires an account. Splay is Linux-only, fully local, and focuses on terminal sessions and worktree management.
+Splay manages git worktrees and runs terminal sessions in them, and nothing else. The other tools bundle more into the app: Superset has a diff viewer and editor, cmux has a browser, Conductor has a review workflow, and Orca has an editor and a browser. With Splay, you use whatever tools you already run in a terminal.
 
-[cmux](https://github.com/manaflow-ai/cmux) is a macOS terminal multiplexer for running coding agents in parallel, with split panes, per-tab notifications, an in-app scriptable browser, and SSH workspaces. Unlike Splay, it doesn't create or manage git worktrees — you supply the checkout layout yourself. Splay runs on Linux as a GTK 4 app, creates worktrees automatically, and has an opinionated, but minimal feature set.
+The tools also differ in which platforms they run on, how they are built, and how they are licensed:
 
-[Conductor](https://www.conductor.build/) is a closed-source macOS app for running Claude Code and Codex agents in parallel across git worktrees, with a built-in UI for inspecting activity and reviewing/merging changes. Unlike Splay, it has no CLI and bundles its own review workflow. Splay is MIT-licensed, Linux-only, and leaves review to whatever tools you'd run in a terminal.
+| | Runs on | Built with | License | Notes |
+|---|---|---|---|---|
+| [Superset](https://github.com/superset-sh/superset) | <img src=".github/assets/apple.svg" height="16" alt="macOS" title="macOS"> <img src=".github/assets/linux.svg" height="16" alt="Linux" title="Linux"> | Electron | ELv2 | Requires an account |
+| [cmux](https://github.com/manaflow-ai/cmux) | <img src=".github/assets/apple.svg" height="16" alt="macOS" title="macOS"> | Swift | GPL-3.0 | No worktree management |
+| [Conductor](https://www.conductor.build/) | <img src=".github/assets/apple.svg" height="16" alt="macOS" title="macOS"> | | Proprietary | No CLI |
+| [Orca](https://github.com/stablyai/orca) | <img src=".github/assets/apple.svg" height="16" alt="macOS" title="macOS"> <img src=".github/assets/linux.svg" height="16" alt="Linux" title="Linux"> <img src=".github/assets/windows.svg" height="16" alt="Windows" title="Windows"> | Electron | MIT | Sends telemetry |
+| Splay | <img src=".github/assets/linux.svg" height="16" alt="Linux" title="Linux"> | GTK 4 | MIT | |
 
 ### I used Swarm. What happens to my workspaces?
 
