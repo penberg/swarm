@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Draw the window title bar dark to match the rest of the window instead of GTK's default gray. ([#75](https://github.com/splay-sh/splay/pull/75))
+- Open the window once repositories are loaded instead of showing the add repository form until they are. ([#79](https://github.com/splay-sh/splay/pull/79))
 
 ## [0.2.0] - 2026-10-12
 
