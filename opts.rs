@@ -52,6 +52,21 @@ pub enum RepoSubcommand {
         #[arg(value_parser = ["exedev"])]
         integration: String,
     },
+    /// Show the template that new remote workspaces are copied from.
+    Template {
+        repository: String,
+        #[arg(long, default_value = "exedev", value_parser = ["exedev"])]
+        sandbox: String,
+        /// Build the template again.
+        #[arg(long)]
+        rebuild: bool,
+    },
+    #[command(hide = true)]
+    BuildTemplate {
+        template_dir: String,
+        remote_url: String,
+        sandbox: String,
+    },
 }
 
 #[derive(Debug, Parser)]

@@ -3,7 +3,7 @@ use std::fs;
 use crate::{
     SplayError,
     repos::Repository,
-    sandbox::{Checkout, CreateRequest, RepoPaths, Sandbox},
+    sandbox::{Checkout, CreateRequest, RepoPaths, Sandbox, SandboxKind, TemplateRequest},
     workspaces::{Workspace, build_worktree_add_args, run_git},
 };
 
@@ -13,11 +13,12 @@ pub struct Local;
 impl Sandbox for Local {
     fn create(&self, request: &CreateRequest) -> Result<Checkout, SplayError> {
         (request.progress)("Creating worktree");
+        let default_branch = request.default_branch.ok_or(SplayError::PathResolution)?;
         let args = build_worktree_add_args(
             request.paths.bare_repo_path,
             request.workspace_path,
             request.workspace_name,
-            request.default_branch,
+            default_branch,
         )?;
         run_git(request.workspace_path.parent(), args)?;
 
@@ -54,6 +55,18 @@ impl Sandbox for Local {
             );
         }
 
+        Ok(())
+    }
+
+    fn new_template_name(&self, repo: &Repository) -> String {
+        repo.name.clone()
+    }
+
+    fn build_template(&self, _request: &TemplateRequest) -> Result<(), SplayError> {
+        Err(SplayError::InvalidSandbox(SandboxKind::Local.to_string()))
+    }
+
+    fn destroy_template(&self, _name: &str) -> Result<(), SplayError> {
         Ok(())
     }
 

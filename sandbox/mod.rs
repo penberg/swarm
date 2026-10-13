@@ -2,7 +2,7 @@ pub mod exedev;
 pub mod local;
 
 use serde::Serialize;
-use std::{fmt, path::Path};
+use std::{fmt, fs::File, path::Path};
 
 use crate::{SplayError, repos::Repository, workspaces::Workspace};
 
@@ -53,8 +53,20 @@ pub struct CreateRequest<'a> {
     /// Local directory reserved for the workspace.
     pub workspace_path: &'a Path,
     pub workspace_name: &'a str,
-    pub default_branch: &'a str,
+    /// Branch new local workspaces start from.
+    pub default_branch: Option<&'a str>,
+    /// Template that new remote workspaces are copied from.
+    pub template: Option<&'a str>,
     pub progress: Progress<'a>,
+}
+
+pub struct TemplateRequest<'a> {
+    pub repo: &'a Repository,
+    /// Name of the template to build, from [`Sandbox::new_template_name`].
+    pub name: &'a str,
+    pub setup_script: Option<&'a str>,
+    /// Receives the output of every build step.
+    pub log: &'a File,
 }
 
 pub struct Checkout {
@@ -69,6 +81,16 @@ pub trait Sandbox: Sync {
 
     /// Destroys the workspace checkout and everything it holds.
     fn destroy(&self, workspace: &Workspace, paths: &RepoPaths) -> Result<(), SplayError>;
+
+    /// Returns a fresh name for a template of `repo`.
+    fn new_template_name(&self, repo: &Repository) -> String;
+
+    /// Builds a template that new workspaces are copied from: the repository
+    /// checkout with the setup script already run.
+    fn build_template(&self, request: &TemplateRequest) -> Result<(), SplayError>;
+
+    /// Destroys a template built by `build_template`.
+    fn destroy_template(&self, name: &str) -> Result<(), SplayError>;
 
     /// Returns the command the local session supervisor runs for `command`.
     fn session_command(
