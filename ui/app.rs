@@ -43,6 +43,8 @@ const SETTLED_PR_STATUS_TTL: Duration = Duration::from_secs(180);
 const MERGED_PR_STATUS_TTL: Duration = Duration::from_secs(300);
 const NO_PR_STATUS_TTL: Duration = Duration::from_secs(300);
 const LOADING_PR_STATUS_TTL: Duration = Duration::from_secs(10);
+/// How long the window waits for the first load before it is shown anyway.
+const INITIAL_LOAD_TIMEOUT: Duration = Duration::from_secs(1);
 const STYLE: &str = r#"
 window {
   background: #0f1115;
@@ -887,6 +889,8 @@ fn build_ui(app: &Application) {
         next_provisioning_id: Cell::new(1),
         removing_workspaces: RefCell::new(HashSet::new()),
         archiving_repositories: RefCell::new(HashSet::new()),
+        loaded: Cell::new(false),
+        unshown_window: RefCell::new(Some(window.clone())),
         settings_repository: RefCell::new(None),
         polling_templates: Cell::new(false),
     });
@@ -908,7 +912,18 @@ fn build_ui(app: &Application) {
     install_template_poller(&state);
     refresh_ui(&state, None, None);
 
-    window.present();
+    // Show the window once the repositories are loaded, or after a timeout
+    // if loading is slow.
+    let state = state.clone();
+    glib::timeout_add_local_once(INITIAL_LOAD_TIMEOUT, move || {
+        present_window(&state);
+    });
+}
+
+fn present_window(state: &Rc<AppState>) {
+    if let Some(window) = state.unshown_window.borrow_mut().take() {
+        window.present();
+    }
 }
 
 pub struct AppState {
@@ -938,6 +953,12 @@ pub struct AppState {
     removing_workspaces: RefCell<HashSet<String>>,
     /// Repositories hidden from the sidebar while they are being archived.
     archiving_repositories: RefCell<HashSet<String>>,
+    /// Whether the repositories have been loaded once, so that an empty
+    /// list means there are none.
+    loaded: Cell<bool>,
+    /// The window until it is first shown, which waits for the first load
+    /// so that it does not open empty.
+    unshown_window: RefCell<Option<ApplicationWindow>>,
     /// Repository whose settings page is open in place of a workspace.
     settings_repository: RefCell<Option<String>>,
     /// Whether a template status refresh is in flight.
@@ -1039,11 +1060,14 @@ fn refresh_ui(
             Ok(groups) => groups,
             Err(err) => {
                 eprintln!("failed to load workspaces: {err}");
+                present_window(&state);
                 return;
             }
         };
+        state.loaded.set(true);
         *state.workspace_groups.borrow_mut() = groups.clone();
         render_ui(&state, &groups, preferred_workspace, preferred_session);
+        present_window(&state);
     });
 }
 
@@ -1607,7 +1631,7 @@ fn render_sidebar_content(
     clear_branch_monitors(state);
     state.pr_indicators.borrow_mut().clear();
 
-    let groups_empty = groups.is_empty();
+    let groups_empty = groups.is_empty() && state.loaded.get();
     sync_repository_form_widgets(state, groups_empty);
     sync_collapse_all_button(state, groups);
     let has_editing_workspace = state.editing_workspace.borrow().is_some();
@@ -1803,6 +1827,8 @@ fn clear_branch_monitors(state: &Rc<AppState>) {
 fn build_repository_form_widgets(state: &Rc<AppState>) -> RepositoryFormWidgets {
     let card = GtkBox::new(Orientation::Vertical, 6);
     card.add_css_class("repo-compose");
+    // Shown once the repositories are loaded and there are none.
+    card.set_visible(false);
 
     let repository_entry = Entry::new();
     repository_entry.set_placeholder_text(Some("github.com/owner/name"));
