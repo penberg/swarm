@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Show the selected repository, workspace and branch in the window title. ([#76](https://github.com/splay-sh/splay/pull/76))
+
 ### Fixed
 
 - Draw the window title bar dark to match the rest of the window instead of GTK's default gray. ([#75](https://github.com/splay-sh/splay/pull/75))

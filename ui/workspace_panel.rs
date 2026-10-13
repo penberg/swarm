@@ -1,6 +1,6 @@
 use gtk::{
-    Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Spinner, Stack, glib,
-    prelude::*,
+    Align, Box as GtkBox, Button, Image, Label, LinkButton, Orientation, Spinner, Stack, Window,
+    glib, prelude::*,
 };
 use splay::{
     forges::github::{self, PullRequestStatus},
@@ -40,6 +40,9 @@ pub struct DetailWidgets {
     terminal_cache: Rc<RefCell<HashMap<String, GtkBox>>>,
     tracked_sessions: TrackedSessions,
 }
+
+/// Window title when no workspace or settings page is shown.
+pub const APP_TITLE: &str = "Splay";
 
 /// Sessions whose foreground program the refresh worker polls, as
 /// `(session id, pid, fallback program)`.
@@ -102,6 +105,7 @@ impl DetailWidgets {
     }
 
     pub fn render_empty(&self) {
+        self.set_window_title(APP_TITLE);
         clear_box(&self.session_toolbar);
         clear_stack(&self.session_stack);
         self.track_session_programs(&[]);
@@ -117,6 +121,15 @@ impl DetailWidgets {
         state: &Rc<AppState>,
         preferred_session: Option<&str>,
     ) {
+        let repo_label = current_groups(state)
+            .into_iter()
+            .find(|group| group.repo_canonical == workspace.repo_canonical)
+            .map_or_else(
+                || workspace.repo_canonical.clone(),
+                |group| group.repo_label,
+            );
+        self.set_window_title(&workspace_title(&repo_label, workspace));
+
         if let Some(provisioning) = &workspace.provisioning {
             self.render_provisioning(workspace, provisioning);
             return;
@@ -219,6 +232,8 @@ impl DetailWidgets {
     }
 
     pub fn render_repository_settings(&self, state: &Rc<AppState>, group: &WorkspaceGroup) {
+        self.set_window_title(&format!("{} settings — {APP_TITLE}", group.repo_label));
+
         // Keep an open settings page as is, so refreshes do not discard edits.
         let page_name = format!("settings:{}", group.repo_canonical);
         if self.session_stack.child_by_name(&page_name).is_some() {
@@ -232,6 +247,12 @@ impl DetailWidgets {
         let page = build_repository_settings(state, group);
         self.session_stack
             .add_titled(&page, Some(&page_name), "settings");
+    }
+
+    fn set_window_title(&self, title: &str) {
+        if let Some(window) = self.container.root().and_downcast::<Window>() {
+            window.set_title(Some(title));
+        }
     }
 
     fn render_provisioning(&self, workspace: &WorkspaceEntry, provisioning: &Provisioning) {
@@ -818,4 +839,53 @@ fn close_specific_session(
             }
         }
     });
+}
+
+/// Window title for a workspace: `repo / workspace (branch) — Splay`, leaving
+/// out the branch when it matches the workspace name.
+fn workspace_title(repo_label: &str, workspace: &WorkspaceEntry) -> String {
+    if workspace.branch.is_empty() || workspace.branch == workspace.name {
+        format!("{repo_label} / {} — {APP_TITLE}", workspace.name)
+    } else {
+        format!(
+            "{repo_label} / {} ({}) — {APP_TITLE}",
+            workspace.name, workspace.branch
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workspace_title;
+    use crate::data::WorkspaceEntry;
+    use splay::sandbox::SandboxKind;
+
+    fn workspace(name: &str, branch: &str) -> WorkspaceEntry {
+        WorkspaceEntry {
+            repo_canonical: "github.com/ghostty-org/ghostty".to_string(),
+            name: name.to_string(),
+            branch: branch.to_string(),
+            path: String::new(),
+            sandbox: SandboxKind::Local,
+            sessions: Vec::new(),
+            recently_used: true,
+            provisioning: None,
+        }
+    }
+
+    #[test]
+    fn workspace_title_includes_differing_branch() {
+        assert_eq!(
+            workspace_title("ghostty", &workspace("fix-render", "main")),
+            "ghostty / fix-render (main) — Splay"
+        );
+    }
+
+    #[test]
+    fn workspace_title_omits_branch_matching_name() {
+        assert_eq!(
+            workspace_title("ghostty", &workspace("fix-render", "fix-render")),
+            "ghostty / fix-render — Splay"
+        );
+    }
 }
