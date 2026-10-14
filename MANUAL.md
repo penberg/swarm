@@ -157,6 +157,8 @@ This directory is intended to hold session-local files such as:
 - metadata
 - logs
 - PTY or attachment state
+- how the session's command exited (`exit`), which the session's supervisor
+  records instead of writing to the database
 
 Sessions are stored under the repository shard because they are attached to workspaces in that repository.
 

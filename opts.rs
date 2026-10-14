@@ -143,7 +143,6 @@ pub enum SessionSubcommand {
     #[command(hide = true)]
     Serve {
         repository: String,
-        repo_db_path: String,
         workspace: String,
         session: String,
         session_dir: String,

@@ -77,7 +77,6 @@ pub async fn run(cmd: SessionCommand) -> Result<(), SplayError> {
         }
         SessionSubcommand::Serve {
             repository,
-            repo_db_path,
             workspace,
             session,
             session_dir,
@@ -86,7 +85,6 @@ pub async fn run(cmd: SessionCommand) -> Result<(), SplayError> {
         } => {
             serve_runtime(
                 &repository,
-                &repo_db_path,
                 &workspace,
                 &session,
                 &session_dir,
