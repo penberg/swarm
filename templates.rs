@@ -10,12 +10,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    env,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{self, Command, Stdio},
+    process::{self, Stdio},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -24,6 +23,7 @@ use crate::{
     SplayError,
     repos::{Repository, RepositoryStore},
     sandbox::{SandboxKind, TemplateRequest, sandbox},
+    self_command,
     sessions::{process_exists, terminate_process},
 };
 
@@ -212,7 +212,7 @@ fn start_build(dir: &Path, repo: &Repository, sandbox_kind: SandboxKind) -> Resu
 
     // Pass everything the builder needs, so that it never opens the index
     // database; see `write_wanted_script`.
-    let mut builder = Command::new(env::current_exe()?);
+    let mut builder = self_command();
     builder
         .args(["repo", "build-template"])
         .arg(dir)

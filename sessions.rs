@@ -13,7 +13,7 @@ use std::{
         },
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -23,7 +23,7 @@ use crate::{
     SplayError, connect, database_error,
     repos::{Repository, RepositoryStore},
     sandbox::sandbox,
-    toolchains,
+    self_command, toolchains,
     workspaces::{Workspace, WorkspaceStore, migrate_repo_db},
 };
 
@@ -283,14 +283,13 @@ impl SessionStore {
         session: &Session,
         command: &[String],
     ) -> Result<(), SplayError> {
-        let exe = env::current_exe()?;
         let supervisor_log_path = session.path.join("supervisor.log");
         let supervisor_log = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&supervisor_log_path)?;
         let supervisor_err = supervisor_log.try_clone()?;
-        let mut child = Command::new(exe);
+        let mut child = self_command();
         child
             .arg("session")
             .arg("serve")
