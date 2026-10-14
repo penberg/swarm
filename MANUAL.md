@@ -58,6 +58,28 @@ Each session belongs to exactly one workspace.
 `splay prune` commands:
 - prune stopped, failed, or exited sessions
 
+## Server
+
+`splay server` is the one process that reads and writes Splay's state. The
+desktop app and every other command are its clients: they ask the server to
+do the work, and start it in the background when it is not running.
+
+The server listens on a Unix socket under `$XDG_RUNTIME_DIR/splay/`, or in
+the data directory when there is no runtime directory, and records the
+socket's path in `server.addr` in the data directory for clients to find.
+It holds `server.lock` in the data directory while it runs, so there is only
+ever one server per data directory, and it writes its output to `server.log`
+next to it when started in the background.
+
+A client refuses to talk to a server from a different build of Splay: it
+stops that server and starts its own. Sessions run in their own processes
+and keep running across server restarts.
+
+`splay server` commands:
+- run the server in the foreground
+- show the running server with `splay server status`
+- stop the running server with `splay server stop`
+
 ## On-Disk Format
 
 `splay` stores persistent state in the XDG data directory:
@@ -172,7 +194,7 @@ Sessions are stored under the repository shard because they are attached to work
 ### Migrating from Swarm
 
 Splay was previously called Swarm and kept its state in `~/.local/share/swarm/`.
-The first time `splay` opens its state and finds only the old
+The first time `splay server` opens its state and finds only the old
 directory, it:
 
 - moves `~/.local/share/swarm/` to `~/.local/share/splay/`,

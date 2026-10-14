@@ -1,11 +1,15 @@
+//! What the UI asks of `splay server`, plus the few things it reads from the
+//! local machine directly.
+
 use splay::{
     SplayError,
-    repos::{Repository, RepositoryStore},
+    api::{Request, WorkspaceWithSessions},
+    client,
+    repos::Repository,
     sandbox::SandboxKind,
-    service,
-    sessions::{SessionStore, default_session_command},
-    templates::{self, TemplateStatus},
-    workspaces::{WorkspaceStore, workspace_git_dir},
+    sessions::Session,
+    templates::TemplateStatus,
+    workspaces::{Workspace, workspace_git_dir},
 };
 pub use splay::{
     api::{
@@ -21,7 +25,7 @@ use std::{
 };
 
 pub async fn load_workspace_groups() -> Result<Vec<WorkspaceGroup>, SplayError> {
-    service::sidebar().await
+    client::call(Request::Sidebar).await
 }
 
 pub async fn create_workspace(
@@ -30,31 +34,26 @@ pub async fn create_workspace(
     sandbox: SandboxKind,
     progress: impl Fn(&str) + Send + Sync + 'static,
 ) -> Result<WorkspaceEntry, SplayError> {
-    let workspace_store = WorkspaceStore::open().await?;
-    let session_store = SessionStore::open().await?;
-
-    let workspace = workspace_store
-        .create(&repository, name.as_deref(), sandbox, &progress)
-        .await?;
-    progress("Starting session");
-    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-    if let Err(err) = session_store.create_initial(&workspace).await {
-        eprintln!("failed to create initial session for {workspace_ref}: {err}");
-    }
-    let sessions = session_store.list(Some(&workspace_ref)).await?;
-
-    Ok(WorkspaceEntry::new(workspace, &sessions))
+    let created = client::call_with_progress(
+        Request::WorkspaceCreate {
+            repository,
+            name,
+            sandbox,
+        },
+        &progress,
+    )
+    .await?;
+    Ok(workspace_entry(created))
 }
 
 pub async fn load_repository_settings(
     repository: String,
 ) -> Result<RepositorySettings, SplayError> {
-    service::repository_settings(&repository).await
+    client::call(Request::RepoSettings { repository }).await
 }
 
 pub async fn save_setup_script(repository: String, script: String) -> Result<(), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    templates::set_setup_script(&repo_store, &repository, &script).await
+    client::call(Request::RepoSetSetupScript { repository, script }).await
 }
 
 /// Enables or disables a remote sandbox and returns its template's status.
@@ -63,20 +62,24 @@ pub async fn set_sandbox_enabled(
     sandbox: SandboxKind,
     enabled: bool,
 ) -> Result<TemplateStatus, SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    templates::set_sandbox_enabled(&repo_store, &repository, sandbox, enabled).await?;
-    let repo = resolve_repository(&repo_store, &repository).await?;
-    Ok(templates::status(&repo_store, &repo, sandbox))
+    client::call(Request::RepoSetSandboxEnabled {
+        repository,
+        sandbox,
+        enabled,
+    })
+    .await
 }
 
 pub async fn rebuild_template(
     repository: String,
     sandbox: SandboxKind,
 ) -> Result<TemplateStatus, SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    let repo = resolve_repository(&repo_store, &repository).await?;
-    templates::rebuild(&repo_store, &repo, sandbox).await?;
-    Ok(templates::status(&repo_store, &repo, sandbox))
+    client::call(Request::TemplateStatus {
+        repository,
+        sandbox,
+        rebuild: true,
+    })
+    .await
 }
 
 /// Returns a template's status with the end of its latest build's output.
@@ -84,58 +87,34 @@ pub async fn load_template(
     repository: String,
     sandbox: SandboxKind,
 ) -> Result<(TemplateStatus, String), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    let repo = resolve_repository(&repo_store, &repository).await?;
-    Ok((
-        templates::status(&repo_store, &repo, sandbox),
-        templates::build_log(&repo_store, &repo, sandbox),
-    ))
+    client::call(Request::TemplateLog {
+        repository,
+        sandbox,
+    })
+    .await
 }
 
 /// Returns the template statuses of the given repositories' remote sandboxes.
 pub async fn load_template_statuses(
     repositories: Vec<(String, Vec<SandboxKind>)>,
 ) -> Result<Vec<(String, Vec<(SandboxKind, TemplateStatus)>)>, SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    let mut statuses = Vec::with_capacity(repositories.len());
-    for (repository, sandboxes) in repositories {
-        let repo = resolve_repository(&repo_store, &repository).await?;
-        let templates = sandboxes
-            .into_iter()
-            .map(|sandbox| (sandbox, templates::status(&repo_store, &repo, sandbox)))
-            .collect();
-        statuses.push((repository, templates));
-    }
-    Ok(statuses)
-}
-
-async fn resolve_repository(
-    repo_store: &RepositoryStore,
-    repository: &str,
-) -> Result<Repository, SplayError> {
-    repo_store
-        .resolve_repository(repository)
-        .await?
-        .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))
+    client::call(Request::TemplateStatuses { repositories }).await
 }
 
 pub async fn add_repository(
     repository: String,
     alias: Option<String>,
 ) -> Result<Repository, SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    repo_store.add(&repository, alias.as_deref()).await
+    client::call(Request::RepoAdd { repository, alias }).await
 }
 
 pub async fn sync_repository(repository: String) -> Result<(), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    repo_store.sync(&repository).await?;
+    let _: Repository = client::call(Request::RepoSync { repository }).await?;
     Ok(())
 }
 
 pub async fn archive_repository(repository: String) -> Result<(), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    repo_store.archive(&repository).await?;
+    let _: Repository = client::call(Request::RepoArchive { repository }).await?;
     Ok(())
 }
 
@@ -143,89 +122,84 @@ pub async fn set_repository_collapsed(
     repository: String,
     collapsed: bool,
 ) -> Result<(), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    if collapsed {
-        repo_store.collapse(&repository).await?;
-    } else {
-        repo_store.expand(&repository).await?;
-    }
+    let _: Repository = client::call(Request::RepoSetCollapsed {
+        repository,
+        collapsed,
+    })
+    .await?;
     Ok(())
 }
 
 pub async fn set_all_repositories_collapsed(collapsed: bool) -> Result<(), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    repo_store.set_all_collapsed(collapsed).await
+    client::call(Request::RepoSetAllCollapsed { collapsed }).await
 }
 
 pub async fn mark_workspace_used(repository: String, workspace: String) -> Result<(), SplayError> {
-    let repo_store = RepositoryStore::open().await?;
-    repo_store
-        .mark_workspace_used(&repository, &workspace)
-        .await
+    client::call(Request::WorkspaceMarkUsed {
+        repository,
+        workspace,
+    })
+    .await
 }
 
 pub async fn rename_workspace(
     workspace_ref: String,
     name: String,
 ) -> Result<WorkspaceEntry, SplayError> {
-    let workspace_store = WorkspaceStore::open().await?;
-    let session_store = SessionStore::open().await?;
-    let workspace = workspace_store.rename(&workspace_ref, &name).await?;
-    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-    let sessions = session_store.list(Some(&workspace_ref)).await?;
-
-    Ok(WorkspaceEntry::new(workspace, &sessions))
+    let renamed = client::call(Request::WorkspaceRename {
+        workspace: workspace_ref,
+        name,
+    })
+    .await?;
+    Ok(workspace_entry(renamed))
 }
 
 pub async fn clone_workspace(
     workspace_ref: String,
     name: String,
 ) -> Result<WorkspaceEntry, SplayError> {
-    let workspace_store = WorkspaceStore::open().await?;
-    let session_store = SessionStore::open().await?;
-    let workspace = workspace_store.clone(&workspace_ref, &name).await?;
-    let workspace_ref = format!("{}:{}", workspace.repository, workspace.name);
-    if let Err(err) = session_store
-        .create(&workspace_ref, &default_session_command())
-        .await
-    {
-        eprintln!("failed to create default session for {workspace_ref}: {err}");
-    }
-    let sessions = session_store.list(Some(&workspace_ref)).await?;
-
-    Ok(WorkspaceEntry::new(workspace, &sessions))
+    let cloned = client::call(Request::WorkspaceClone {
+        workspace: workspace_ref,
+        name,
+    })
+    .await?;
+    Ok(workspace_entry(cloned))
 }
 
 pub async fn remove_workspace(workspace_ref: String) -> Result<WorkspaceEntry, SplayError> {
-    let session_store = SessionStore::open().await?;
-    let workspace_store = WorkspaceStore::open().await?;
-    let sessions = session_store.list(Some(&workspace_ref)).await?;
-
-    for session in sessions {
-        session_store.stop(&session.id).await?;
-        session_store.remove(&session.id).await?;
-    }
-
-    let workspace = workspace_store.remove(&workspace_ref).await?;
-
+    let workspace: Workspace = client::call(Request::WorkspaceRemove {
+        workspace: workspace_ref,
+        stop_sessions: true,
+    })
+    .await?;
     Ok(WorkspaceEntry::new(workspace, &[]))
 }
 
 pub async fn create_session(workspace_ref: String) -> Result<SessionEntry, SplayError> {
-    let session_store = SessionStore::open().await?;
-    let session = session_store
-        .create(&workspace_ref, &default_session_command())
-        .await?;
-
+    let session: Session = client::call(Request::SessionCreate {
+        workspace: workspace_ref,
+        command: None,
+    })
+    .await?;
     Ok(SessionEntry::new(&session))
 }
 
 pub async fn close_session(session_id: String) -> Result<SessionEntry, SplayError> {
-    let session_store = SessionStore::open().await?;
-    session_store.stop(&session_id).await?;
-    let session = session_store.remove(&session_id).await?;
-
+    let session: Session = client::call(Request::SessionClose {
+        session: session_id,
+    })
+    .await?;
     Ok(SessionEntry::new(&session))
+}
+
+fn workspace_entry(created: WorkspaceWithSessions) -> WorkspaceEntry {
+    if let Some(error) = &created.session_error {
+        eprintln!(
+            "failed to start a session in {}:{}: {error}",
+            created.workspace.repository, created.workspace.name
+        );
+    }
+    WorkspaceEntry::new(created.workspace, &created.sessions)
 }
 
 pub fn current_workspace_branch(path: &str) -> Result<String, SplayError> {

@@ -1,5 +1,5 @@
-//! What `splay server` does for each [`Request`], and what Splay's clients
-//! show, gathered from the stores.
+//! What `splay server` does for each [`Request`]. Only the server calls into
+//! here, so only the server opens the databases.
 
 use serde::Serialize;
 use std::{
@@ -271,7 +271,7 @@ async fn with_sessions(
 }
 
 /// Loads what the repository settings page shows.
-pub async fn repository_settings(repository: &str) -> Result<RepositorySettings, SplayError> {
+async fn repository_settings(repository: &str) -> Result<RepositorySettings, SplayError> {
     let store = repos().await?;
     let repo = resolve_repository(&store, repository).await?;
     let mirror_path = store.bare_repo_path(&repo).display().to_string();
@@ -296,7 +296,7 @@ pub async fn repository_settings(repository: &str) -> Result<RepositorySettings,
 
 /// Loads the sidebar: every repository that is not archived, with its
 /// workspaces and their sessions.
-pub async fn sidebar() -> Result<Vec<WorkspaceGroup>, SplayError> {
+async fn sidebar() -> Result<Vec<WorkspaceGroup>, SplayError> {
     let repo_store = repos().await?;
     let workspace_store = WorkspaceStore::open().await?;
     let session_store = SessionStore::open().await?;
