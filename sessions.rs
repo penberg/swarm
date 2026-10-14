@@ -14,6 +14,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use turso::{Builder, Connection, Row};
@@ -312,7 +313,10 @@ impl SessionStore {
             });
         }
 
-        child.spawn()?;
+        let mut child = child.spawn()?;
+        // Reap the supervisor when the session ends, so that the process
+        // that started it does not collect zombies.
+        thread::spawn(move || child.wait());
         Ok(())
     }
 

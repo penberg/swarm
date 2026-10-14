@@ -15,6 +15,7 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{self, Command, Stdio},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -228,11 +229,15 @@ fn start_build(dir: &Path, repo: &Repository, sandbox_kind: SandboxKind) -> Resu
             Ok(())
         });
     }
-    let child = builder.spawn()?;
+    let mut child = builder.spawn()?;
+    let pid = child.id();
+    // Reap the builder when it exits: until then its pid stays taken, and the
+    // build would look like it is still running.
+    thread::spawn(move || child.wait());
 
     update_state(dir, |state| {
         state.build = Some(TemplateBuild {
-            pid: child.id(),
+            pid,
             name: None,
             started_at: unix_timestamp(),
             error: None,
