@@ -223,19 +223,6 @@ impl SessionStore {
         Ok(pruned)
     }
 
-    pub async fn attach(&self, session_id: &str, _follow: bool) -> Result<(), SplayError> {
-        let (repo, mut session, db) = self.find_session(session_id).await?;
-        self.refresh_session_status(&db, &repo, &mut session)
-            .await?;
-
-        if session.status == SESSION_STATUS_RUNNING && session.socket_path.exists() {
-            attach_to_socket(&session.socket_path)?;
-            return Ok(());
-        }
-
-        print_file(&session.log_path)
-    }
-
     fn prepare_session(
         &self,
         repo: &Repository,
@@ -780,6 +767,16 @@ fn session_event_loop(
             return Ok(decode_wait_status(status));
         }
     }
+}
+
+/// Attaches the terminal to a running session, or prints the output of one
+/// that ended.
+pub fn attach(session: &Session) -> Result<(), SplayError> {
+    if session.status == SESSION_STATUS_RUNNING && session.socket_path.exists() {
+        return attach_to_socket(&session.socket_path);
+    }
+
+    print_file(&session.log_path)
 }
 
 fn attach_to_socket(socket_path: &Path) -> Result<(), SplayError> {

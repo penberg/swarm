@@ -1,19 +1,23 @@
 use crate::{
     SplayError,
+    api::Request,
+    client,
     opts::{SessionCommand, SessionSubcommand},
-    sessions::{SessionStore, serve_runtime},
+    sessions::{Session, attach, serve_runtime},
 };
 
 pub async fn run(cmd: SessionCommand) -> Result<(), SplayError> {
     match cmd.command {
         SessionSubcommand::Create { workspace, command } => {
-            let store = SessionStore::open().await?;
-            let session = store.create(&workspace, &command).await?;
+            let session: Session = client::call(Request::SessionCreate {
+                workspace,
+                command: Some(command),
+            })
+            .await?;
             println!("Created session {}", session.id);
         }
         SessionSubcommand::List { workspace, json } => {
-            let store = SessionStore::open().await?;
-            let sessions = store.list(workspace.as_deref()).await?;
+            let sessions: Vec<Session> = client::call(Request::SessionList { workspace }).await?;
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&sessions)?);
@@ -40,8 +44,7 @@ pub async fn run(cmd: SessionCommand) -> Result<(), SplayError> {
             }
         }
         SessionSubcommand::Info { session } => {
-            let store = SessionStore::open().await?;
-            let session = store.info(&session).await?;
+            let session: Session = client::call(Request::SessionInfo { session }).await?;
             println!("Session: {}", session.id);
             println!("Repository: {}", session.repository);
             println!("Workspace: {}", session.workspace);
@@ -61,20 +64,19 @@ pub async fn run(cmd: SessionCommand) -> Result<(), SplayError> {
                     .map_or("-".to_string(), |code| code.to_string())
             );
         }
-        SessionSubcommand::Attach { session, follow } => {
-            let store = SessionStore::open().await?;
-            store.attach(&session, follow).await?;
+        SessionSubcommand::Attach { session, follow: _ } => {
+            let session: Session = client::call(Request::SessionInfo { session }).await?;
+            attach(&session)?;
         }
         SessionSubcommand::Stop { session } => {
-            let store = SessionStore::open().await?;
-            let session = store.stop(&session).await?;
+            let session: Session = client::call(Request::SessionStop { session }).await?;
             println!("Stopped session {}", session.id);
         }
         SessionSubcommand::Remove { session } => {
-            let store = SessionStore::open().await?;
-            let session = store.remove(&session).await?;
+            let session: Session = client::call(Request::SessionRemove { session }).await?;
             println!("Removed session {}", session.id);
         }
+        // The session host runs next to the server, not in it.
         SessionSubcommand::Serve {
             repository,
             workspace,
