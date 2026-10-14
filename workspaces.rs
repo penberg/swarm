@@ -9,7 +9,7 @@ use turso::{Builder, Connection, Row};
 
 use crate::{
     SplayError, connect, database_error,
-    repos::{Repository, RepositoryStore},
+    repos::{Repository, RepositoryStore, lock_repo},
     sandbox::{CreateRequest, Progress, RepoPaths, SandboxKind, sandbox},
     templates,
 };
@@ -81,6 +81,12 @@ impl WorkspaceStore {
                 sandbox: sandbox_kind.to_string(),
             });
         }
+        // Remote workspaces leave the mirror alone, and copying a template
+        // takes long enough that they must not wait for each other.
+        let _lock = match sandbox_kind {
+            SandboxKind::Local => Some(lock_repo(&repo).await),
+            _ => None,
+        };
         // Local workspaces branch off the freshly synced mirror; remote ones
         // are copies of the sandbox's template, which fetches by itself.
         let (default_branch, template) = if sandbox_kind == SandboxKind::Local {
@@ -148,6 +154,7 @@ impl WorkspaceStore {
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
             .await?;
+        let _lock = lock_repo(&repo).await;
         let db = self.open_repo_db(&repo).await?;
         let source = self
             .find_workspace(&db, &repo, &reference.workspace)
@@ -242,6 +249,7 @@ impl WorkspaceStore {
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
             .await?;
+        let _lock = lock_repo(&repo).await;
         let db = self.open_repo_db(&repo).await?;
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)
@@ -315,6 +323,7 @@ impl WorkspaceStore {
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
             .await?;
+        let _lock = lock_repo(&repo).await;
         let db = self.open_repo_db(&repo).await?;
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)

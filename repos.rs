@@ -5,8 +5,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::OwnedMutexGuard;
 use turso::{Builder, Connection, Database};
 
 use crate::{SplayError, connect, database_error, legacy, sandbox::SandboxKind};
@@ -109,6 +111,23 @@ impl SplayPaths {
     fn repo_meta_path(&self, repo: &Repository) -> PathBuf {
         self.repo_dir(repo).join("meta.toml")
     }
+}
+
+/// Serializes changes to each repository's mirror and workspace names within
+/// the process: git refuses concurrent writes to a repository's config, and
+/// two new workspaces must not take the same name.
+static REPO_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Holds the lock of `repo` until the returned guard is dropped.
+pub async fn lock_repo(repo: &Repository) -> OwnedMutexGuard<()> {
+    let lock = REPO_LOCKS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .entry(repo.canonical())
+        .or_default()
+        .clone();
+    lock.lock_owned().await
 }
 
 const INDEX_DB_OPEN_ATTEMPTS: u32 = 40;
@@ -396,6 +415,7 @@ impl RepositoryStore {
             .resolve(repository)
             .await?
             .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        let _lock = lock_repo(&repo).await;
         self.sync_repo(&repo)?;
 
         Ok(repo)
