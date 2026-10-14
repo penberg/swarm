@@ -708,6 +708,29 @@ fn ready_template(
     }))
 }
 
+/// Returns the git directory of a workspace checkout, following the `.git`
+/// file that linked worktrees have instead of a directory.
+pub fn workspace_git_dir(workspace_path: &Path) -> Result<PathBuf, SplayError> {
+    let git_path = workspace_path.join(".git");
+    if git_path.is_dir() {
+        return Ok(git_path);
+    }
+
+    let contents = fs::read_to_string(&git_path)?;
+    let git_dir = contents
+        .strip_prefix("gitdir: ")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| SplayError::Git(format!("invalid gitdir file at {}", git_path.display())))?;
+
+    let git_dir = Path::new(git_dir);
+    if git_dir.is_absolute() {
+        return Ok(git_dir.to_path_buf());
+    }
+
+    Ok(workspace_path.join(git_dir))
+}
+
 fn workspace_from_row(repo: &Repository, row: &Row) -> Result<Workspace, SplayError> {
     Ok(Workspace {
         repository: repo.canonical(),

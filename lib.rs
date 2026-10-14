@@ -1,3 +1,4 @@
+pub mod api;
 pub mod cmd;
 pub mod forges;
 mod legacy;
@@ -5,6 +6,7 @@ pub mod opts;
 pub mod prune;
 pub mod repos;
 pub mod sandbox;
+pub mod service;
 pub mod sessions;
 pub mod templates;
 pub mod toolchains;
