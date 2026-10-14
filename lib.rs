@@ -94,6 +94,21 @@ pub enum SplayError {
     LegacyDataDirInUse { path: PathBuf, sessions: usize },
 }
 
+/// How long a connection waits for another connection's write to finish.
+/// The database admits one writer at a time, and a process may run several
+/// operations on it at once.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Connects to an open database.
+pub(crate) fn connect(db: &turso::Database, path: &Path) -> Result<turso::Connection, SplayError> {
+    let conn = db
+        .connect()
+        .map_err(|err| database_error(path, "connect", err))?;
+    conn.busy_timeout(BUSY_TIMEOUT)
+        .map_err(|err| database_error(path, "configure", err))?;
+    Ok(conn)
+}
+
 pub fn database_error(path: &Path, operation: &str, source: turso::Error) -> SplayError {
     SplayError::Database {
         path: path.to_path_buf(),

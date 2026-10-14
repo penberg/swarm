@@ -19,7 +19,7 @@ use std::{
 use turso::{Builder, Connection, Row};
 
 use crate::{
-    SplayError, database_error,
+    SplayError, connect, database_error,
     repos::{Repository, RepositoryStore},
     sandbox::sandbox,
     toolchains,
@@ -512,9 +512,7 @@ impl SessionStore {
             .build()
             .await
             .map_err(|err| database_error(&repo_db_path, "open", err))?;
-        let conn = db
-            .connect()
-            .map_err(|err| database_error(&repo_db_path, "connect", err))?;
+        let conn = connect(&db, &repo_db_path)?;
         migrate_repo_db(&conn, &repo_db_path).await?;
         Ok(conn)
     }
@@ -751,9 +749,7 @@ async fn open_repo_db_at_path(path: &Path) -> Result<Connection, SplayError> {
         .build()
         .await
         .map_err(|err| database_error(path, "open", err))?;
-    let conn = db
-        .connect()
-        .map_err(|err| database_error(path, "connect", err))?;
+    let conn = connect(&db, path)?;
     migrate_repo_db(&conn, path).await?;
     Ok(conn)
 }

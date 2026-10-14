@@ -9,7 +9,7 @@ use std::{
 };
 use turso::{Builder, Connection, Database};
 
-use crate::{SplayError, database_error, legacy, sandbox::SandboxKind};
+use crate::{SplayError, connect, database_error, legacy, sandbox::SandboxKind};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Repository {
@@ -130,9 +130,7 @@ impl RepositoryStore {
 
         let index_db_path = paths.index_db_path.clone();
         let db = open_index_db(&index_db_path).await?;
-        let conn = db
-            .connect()
-            .map_err(|err| database_error(&index_db_path, "connect", err))?;
+        let conn = connect(&db, &index_db_path)?;
 
         conn.execute_batch(
             "
@@ -328,9 +326,7 @@ impl RepositoryStore {
             .build()
             .await
             .map_err(|err| database_error(&repo_db_path, "open", err))?;
-        let repo_conn = repo_db
-            .connect()
-            .map_err(|err| database_error(&repo_db_path, "connect", err))?;
+        let repo_conn = connect(&repo_db, &repo_db_path)?;
         repo_conn
             .execute_batch(
                 "
