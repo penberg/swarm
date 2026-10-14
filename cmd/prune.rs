@@ -42,8 +42,6 @@ fn report_workspaces(report: &PruneReport) -> Result<(), SplayError> {
             failure.error
         );
     }
-    eprintln!(
-        "note: remove the directories listed above manually, then run `splayctl prune` again"
-    );
+    eprintln!("note: remove the directories listed above manually, then run `splay prune` again");
     Err(SplayError::PruneIncomplete(report.failed.len()))
 }

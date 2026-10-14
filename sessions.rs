@@ -283,7 +283,7 @@ impl SessionStore {
         session: &Session,
         command: &[String],
     ) -> Result<(), SplayError> {
-        let exe = supervisor_executable()?;
+        let exe = env::current_exe()?;
         let supervisor_log_path = session.path.join("supervisor.log");
         let supervisor_log = OpenOptions::new()
             .create(true)
@@ -781,17 +781,6 @@ fn session_event_loop(
             return Ok(decode_wait_status(status));
         }
     }
-}
-
-pub(crate) fn supervisor_executable() -> Result<PathBuf, SplayError> {
-    let exe = env::current_exe()?;
-    let candidate = exe.with_file_name("splayctl");
-
-    if candidate.exists() {
-        return Ok(candidate);
-    }
-
-    Ok(exe)
 }
 
 fn attach_to_socket(socket_path: &Path) -> Result<(), SplayError> {

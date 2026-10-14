@@ -4,12 +4,15 @@ use clap::{Parser, Subcommand};
 #[command(name = "splay")]
 #[command(about = "Manage coding-agent repositories and workspaces")]
 pub struct Opts {
+    /// Starts the desktop app when omitted.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Start the desktop app.
+    Ui,
     Prune(PruneCommand),
     Repo(RepoCommand),
     Session(SessionCommand),

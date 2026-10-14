@@ -2,7 +2,7 @@
 //!
 //! A remote sandbox keeps one template per repository: a checkout with the
 //! repository's setup script already run. Templates are built by a detached
-//! `splayctl repo build-template` process, so that a build survives the
+//! `splay repo build-template` process, so that a build survives the
 //! process that started it. The builder never opens the index database,
 //! which a process can keep locked against all others for as long as it
 //! runs: it gets the setup script from a file, and the template's state lives
@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
+    env,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
@@ -23,7 +24,7 @@ use crate::{
     SplayError,
     repos::{Repository, RepositoryStore},
     sandbox::{SandboxKind, TemplateRequest, sandbox},
-    sessions::{process_exists, supervisor_executable, terminate_process},
+    sessions::{process_exists, terminate_process},
 };
 
 /// How much of the end of the build log `build_log` returns.
@@ -211,7 +212,7 @@ fn start_build(dir: &Path, repo: &Repository, sandbox_kind: SandboxKind) -> Resu
 
     // Pass everything the builder needs, so that it never opens the index
     // database; see `write_wanted_script`.
-    let mut builder = Command::new(supervisor_executable()?);
+    let mut builder = Command::new(env::current_exe()?);
     builder
         .args(["repo", "build-template"])
         .arg(dir)

@@ -703,7 +703,7 @@ fn ready_template(
         format!("the {sandbox_kind} template of `{repository}` failed to build: {error}")
     } else {
         format!(
-            "`{repository}` has no {sandbox_kind} template; build it with `splayctl repo template {repository} --rebuild`"
+            "`{repository}` has no {sandbox_kind} template; build it with `splay repo template {repository} --rebuild`"
         )
     }))
 }

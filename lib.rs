@@ -69,7 +69,7 @@ pub enum SplayError {
     InvalidSandbox(String),
 
     #[error(
-        "{sandbox} is not enabled for repository `{repository}`; enable it with `splayctl repo enable {repository} {sandbox}`"
+        "{sandbox} is not enabled for repository `{repository}`; enable it with `splay repo enable {repository} {sandbox}`"
     )]
     SandboxNotEnabled { repository: String, sandbox: String },
 

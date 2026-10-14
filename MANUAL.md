@@ -172,7 +172,7 @@ Sessions are stored under the repository shard because they are attached to work
 ### Migrating from Swarm
 
 Splay was previously called Swarm and kept its state in `~/.local/share/swarm/`.
-The first time `splay` or `splayctl` opens its state and finds only the old
+The first time `splay` opens its state and finds only the old
 directory, it:
 
 - moves `~/.local/share/swarm/` to `~/.local/share/splay/`,

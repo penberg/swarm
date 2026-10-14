@@ -25,7 +25,7 @@ Splay runs on Linux (x86-64, glibc 2.39 or newer, GTK 4). Install the latest rel
 curl -fsSL https://splay.sh/install.sh | sh
 ```
 
-This puts `splay` and `splayctl` in `~/.local/bin` and adds Splay to your app launcher.
+This puts `splay` in `~/.local/bin` and adds Splay to your app launcher.
 
 ## Getting started
 
@@ -39,10 +39,10 @@ splay
   <img src=".github/assets/hero.png" width="760" alt="Splay">
 </p>
 
-Or drive Splay from the command line with `splayctl`:
+Or drive Splay from the command line:
 
 ```console
-splayctl --help
+splay --help
 ```
 
 For more information, check out the [documentation section](#documentation).
