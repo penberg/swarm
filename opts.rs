@@ -13,11 +13,32 @@ pub struct Opts {
 pub enum Command {
     /// Start the desktop app.
     Ui,
+    /// Run the server that owns Splay's state. Other commands start it when
+    /// it is not running.
+    Server(ServerCommand),
     Prune(PruneCommand),
     Repo(RepoCommand),
     Session(SessionCommand),
     #[command(alias = "ws")]
     Workspace(WorkspaceCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct ServerCommand {
+    #[command(subcommand)]
+    pub command: Option<ServerSubcommand>,
+    /// Detach from the terminal and write output to `server.log`.
+    #[arg(long, hide = true)]
+    pub background: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServerSubcommand {
+    /// Show the running server.
+    Status,
+    /// Stop the running server once its running requests finish. Sessions
+    /// keep running.
+    Stop,
 }
 
 #[derive(Debug, Parser)]

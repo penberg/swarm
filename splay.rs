@@ -37,6 +37,7 @@ fn main() {
     let result = runtime.block_on(async {
         match command {
             Command::Ui => unreachable!("handled above"),
+            Command::Server(cmd) => cmd::server::run(cmd).await,
             Command::Prune(cmd) => cmd::prune::run(cmd).await,
             Command::Repo(cmd) => cmd::repo::run(cmd).await,
             Command::Session(cmd) => cmd::session::run(cmd).await,

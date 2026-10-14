@@ -55,7 +55,7 @@ struct TemplateBuild {
 }
 
 /// A repository's template in one sandbox.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TemplateStatus {
     /// The template new workspaces are copied from, if one has been built.
     pub ready: Option<ReadyTemplate>,

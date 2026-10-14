@@ -1,5 +1,7 @@
-//! What Splay's clients show, gathered from the stores.
+//! What `splay server` does for each [`Request`], and what Splay's clients
+//! show, gathered from the stores.
 
+use serde::Serialize;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -8,15 +10,234 @@ use std::{
 
 use crate::{
     SplayError,
-    api::{RepositoryDetails, RepositorySettings, SessionEntry, WorkspaceEntry, WorkspaceGroup},
-    repos::{Repository, RepositoryStore},
-    sessions::SessionStore,
+    api::{
+        PruneFailureSummary, PruneSummary, RepositoryDetails, RepositorySettings, Request,
+        ServerStatus, SessionEntry, WorkspaceEntry, WorkspaceGroup, WorkspaceWithSessions,
+        build_id,
+    },
+    prune::PruneStore,
+    repos::{Repository, RepositoryStore, data_dir},
+    sandbox::Progress,
+    sessions::{SessionStore, default_session_command},
     templates,
     workspaces::{Workspace, WorkspaceStore, workspace_git_dir},
 };
 
 /// How long a repository stays in the main sidebar list after its last use.
 const RECENTLY_USED_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Handles one request and returns its reply value. `Shutdown` is handled by
+/// the server itself.
+pub async fn handle(
+    request: Request,
+    progress: Progress<'_>,
+) -> Result<serde_json::Value, SplayError> {
+    match request {
+        Request::Status => reply(ServerStatus {
+            pid: std::process::id(),
+            build: build_id().to_string(),
+            data_dir: data_dir()?,
+        }),
+        Request::Shutdown => reply(()),
+
+        Request::RepoAdd { repository, alias } => {
+            reply(repos().await?.add(&repository, alias.as_deref()).await?)
+        }
+        Request::RepoSync { repository } => reply(repos().await?.sync(&repository).await?),
+        Request::RepoRemove { repository } => reply(repos().await?.remove(&repository).await?),
+        Request::RepoArchive { repository } => reply(repos().await?.archive(&repository).await?),
+        Request::RepoUnarchive { repository } => {
+            reply(repos().await?.unarchive(&repository).await?)
+        }
+        Request::RepoList => reply(repos().await?.list().await?),
+        Request::RepoSetCollapsed {
+            repository,
+            collapsed,
+        } => {
+            let store = repos().await?;
+            if collapsed {
+                reply(store.collapse(&repository).await?)
+            } else {
+                reply(store.expand(&repository).await?)
+            }
+        }
+        Request::RepoSetAllCollapsed { collapsed } => {
+            reply(repos().await?.set_all_collapsed(collapsed).await?)
+        }
+        Request::RepoSettings { repository } => reply(repository_settings(&repository).await?),
+        Request::RepoSetSetupScript { repository, script } => {
+            let store = repos().await?;
+            reply(templates::set_setup_script(&store, &repository, &script).await?)
+        }
+        Request::RepoSetSandboxEnabled {
+            repository,
+            sandbox,
+            enabled,
+        } => {
+            let store = repos().await?;
+            templates::set_sandbox_enabled(&store, &repository, sandbox, enabled).await?;
+            let repo = resolve_repository(&store, &repository).await?;
+            reply(templates::status(&store, &repo, sandbox))
+        }
+        Request::TemplateStatus {
+            repository,
+            sandbox,
+            rebuild,
+        } => {
+            let store = repos().await?;
+            let repo = resolve_repository(&store, &repository).await?;
+            if rebuild {
+                templates::rebuild(&store, &repo, sandbox).await?;
+            }
+            reply(templates::status(&store, &repo, sandbox))
+        }
+        Request::TemplateLog {
+            repository,
+            sandbox,
+        } => {
+            let store = repos().await?;
+            let repo = resolve_repository(&store, &repository).await?;
+            reply((
+                templates::status(&store, &repo, sandbox),
+                templates::build_log(&store, &repo, sandbox),
+            ))
+        }
+        Request::TemplateStatuses { repositories } => {
+            let store = repos().await?;
+            let mut statuses = Vec::with_capacity(repositories.len());
+            for (repository, sandboxes) in repositories {
+                let repo = resolve_repository(&store, &repository).await?;
+                let templates = sandboxes
+                    .into_iter()
+                    .map(|sandbox| (sandbox, templates::status(&store, &repo, sandbox)))
+                    .collect::<Vec<_>>();
+                statuses.push((repository, templates));
+            }
+            reply(statuses)
+        }
+
+        Request::WorkspaceCreate {
+            repository,
+            name,
+            sandbox,
+        } => {
+            let workspace = WorkspaceStore::open()
+                .await?
+                .create(&repository, name.as_deref(), sandbox, progress)
+                .await?;
+            progress("Starting session");
+            let sessions = SessionStore::open().await?;
+            let session_error = sessions
+                .create_initial(&workspace)
+                .await
+                .err()
+                .map(|err| err.to_string());
+            reply(with_sessions(&sessions, workspace, session_error).await?)
+        }
+        Request::WorkspaceClone { workspace, name } => {
+            let cloned = WorkspaceStore::open()
+                .await?
+                .clone(&workspace, &name)
+                .await?;
+            let sessions = SessionStore::open().await?;
+            let session_error = sessions
+                .create(&workspace_ref(&cloned), &default_session_command())
+                .await
+                .err()
+                .map(|err| err.to_string());
+            reply(with_sessions(&sessions, cloned, session_error).await?)
+        }
+        Request::WorkspaceList { repository } => {
+            reply(WorkspaceStore::open().await?.list(&repository).await?)
+        }
+        Request::WorkspaceInfo { workspace } => {
+            reply(WorkspaceStore::open().await?.info(&workspace).await?)
+        }
+        Request::WorkspaceRename { workspace, name } => {
+            let renamed = WorkspaceStore::open()
+                .await?
+                .rename(&workspace, &name)
+                .await?;
+            let sessions = SessionStore::open().await?;
+            reply(with_sessions(&sessions, renamed, None).await?)
+        }
+        Request::WorkspaceRemove {
+            workspace,
+            stop_sessions,
+        } => {
+            if stop_sessions {
+                let sessions = SessionStore::open().await?;
+                for session in sessions.list(Some(&workspace)).await? {
+                    sessions.stop(&session.id).await?;
+                    sessions.remove(&session.id).await?;
+                }
+            }
+            reply(WorkspaceStore::open().await?.remove(&workspace).await?)
+        }
+        Request::WorkspaceMarkUsed {
+            repository,
+            workspace,
+        } => reply(
+            repos()
+                .await?
+                .mark_workspace_used(&repository, &workspace)
+                .await?,
+        ),
+
+        Request::SessionCreate { workspace, command } => {
+            let command = command.unwrap_or_else(default_session_command);
+            reply(
+                SessionStore::open()
+                    .await?
+                    .create(&workspace, &command)
+                    .await?,
+            )
+        }
+        Request::SessionList { workspace } => reply(
+            SessionStore::open()
+                .await?
+                .list(workspace.as_deref())
+                .await?,
+        ),
+        Request::SessionInfo { session } => {
+            reply(SessionStore::open().await?.info(&session).await?)
+        }
+        Request::SessionStop { session } => {
+            reply(SessionStore::open().await?.stop(&session).await?)
+        }
+        Request::SessionRemove { session } => {
+            reply(SessionStore::open().await?.remove(&session).await?)
+        }
+        Request::SessionClose { session } => {
+            let sessions = SessionStore::open().await?;
+            sessions.stop(&session).await?;
+            reply(sessions.remove(&session).await?)
+        }
+
+        Request::PruneSessions => reply(PruneStore::open().await?.sessions().await?),
+        Request::PruneWorkspaces => {
+            let report = PruneStore::open().await?.workspaces().await?;
+            reply(PruneSummary {
+                pruned: report.pruned,
+                failed: report
+                    .failed
+                    .into_iter()
+                    .map(|failure| PruneFailureSummary {
+                        name: failure.name,
+                        path: failure.path,
+                        error: failure.error.to_string(),
+                    })
+                    .collect(),
+            })
+        }
+
+        Request::Sidebar => reply(sidebar().await?),
+    }
+}
+
+fn reply<T: Serialize>(value: T) -> Result<serde_json::Value, SplayError> {
+    Ok(serde_json::to_value(value)?)
+}
 
 async fn repos() -> Result<RepositoryStore, SplayError> {
     RepositoryStore::open().await
@@ -34,6 +255,19 @@ async fn resolve_repository(
 
 fn workspace_ref(workspace: &Workspace) -> String {
     format!("{}:{}", workspace.repository, workspace.name)
+}
+
+async fn with_sessions(
+    sessions: &SessionStore,
+    workspace: Workspace,
+    session_error: Option<String>,
+) -> Result<WorkspaceWithSessions, SplayError> {
+    let sessions = sessions.list(Some(&workspace_ref(&workspace))).await?;
+    Ok(WorkspaceWithSessions {
+        workspace,
+        sessions,
+        session_error,
+    })
 }
 
 /// Loads what the repository settings page shows.

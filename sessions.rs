@@ -34,7 +34,7 @@ const SESSION_STATUS_FAILED: &str = "failed";
 const SESSION_STATUS_STOPPED: &str = "stopped";
 const ATTACH_DETACH_BYTE: u8 = 0x1d;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub repository: String,

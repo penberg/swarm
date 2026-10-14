@@ -1,5 +1,5 @@
 use directories::ProjectDirs;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
@@ -13,7 +13,7 @@ use turso::{Builder, Connection, Database};
 
 use crate::{SplayError, connect, database_error, legacy, sandbox::SandboxKind};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repository {
     pub host: String,
     pub owner: String,
@@ -128,6 +128,11 @@ pub async fn lock_repo(repo: &Repository) -> OwnedMutexGuard<()> {
         .or_default()
         .clone();
     lock.lock_owned().await
+}
+
+/// Returns the directory Splay keeps its state in, without creating it.
+pub fn data_dir() -> Result<PathBuf, SplayError> {
+    Ok(SplayPaths::resolve()?.data_dir)
 }
 
 const INDEX_DB_OPEN_ATTEMPTS: u32 = 40;

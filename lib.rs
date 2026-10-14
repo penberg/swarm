@@ -1,4 +1,5 @@
 pub mod api;
+pub mod client;
 pub mod cmd;
 pub mod forges;
 mod legacy;
@@ -6,6 +7,7 @@ pub mod opts;
 pub mod prune;
 pub mod repos;
 pub mod sandbox;
+pub mod server;
 pub mod service;
 pub mod sessions;
 pub mod templates;
@@ -90,6 +92,15 @@ pub enum SplayError {
 
     #[error("failed to prune {0} workspace(s)")]
     PruneIncomplete(usize),
+
+    #[error("{0}")]
+    Server(String),
+
+    #[error("splay server is unavailable: {0}")]
+    ServerUnavailable(String),
+
+    #[error("another splay server is running; it holds `{0}`")]
+    ServerRunning(PathBuf),
 
     #[error("failed to resolve splay data directory")]
     PathResolution,
