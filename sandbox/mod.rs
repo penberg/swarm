@@ -1,13 +1,13 @@
 pub mod exedev;
 pub mod local;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{fmt, fs::File, path::Path};
 
 use crate::{SplayError, repos::Repository, workspaces::Workspace};
 
 /// Where a workspace's checkout lives and where its sessions run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SandboxKind {
     #[serde(rename = "local")]
     Local,

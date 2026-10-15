@@ -15,7 +15,9 @@ use std::{
 };
 use turso::{Builder, Connection};
 
-use crate::{SplayError, database_error, sessions::process_exists, workspaces::migrate_repo_db};
+use crate::{
+    SplayError, connect, database_error, sessions::process_exists, workspaces::migrate_repo_db,
+};
 
 pub(crate) async fn migrate_data_dir(legacy_dir: &Path, data_dir: &Path) -> Result<(), SplayError> {
     if fs::symlink_metadata(data_dir).is_ok() || !legacy_dir.is_dir() {
@@ -105,9 +107,7 @@ async fn open_repo_db(path: &Path) -> Result<Connection, SplayError> {
         .build()
         .await
         .map_err(|err| database_error(path, "open", err))?;
-    let conn = db
-        .connect()
-        .map_err(|err| database_error(path, "connect", err))?;
+    let conn = connect(&db, path)?;
     migrate_repo_db(&conn, path).await?;
     Ok(conn)
 }

@@ -4,17 +4,41 @@ use clap::{Parser, Subcommand};
 #[command(name = "splay")]
 #[command(about = "Manage coding-agent repositories and workspaces")]
 pub struct Opts {
+    /// Starts the desktop app when omitted.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Start the desktop app.
+    Ui,
+    /// Run the server that owns Splay's state. Other commands start it when
+    /// it is not running.
+    Server(ServerCommand),
     Prune(PruneCommand),
     Repo(RepoCommand),
     Session(SessionCommand),
     #[command(alias = "ws")]
     Workspace(WorkspaceCommand),
+}
+
+#[derive(Debug, Parser)]
+pub struct ServerCommand {
+    #[command(subcommand)]
+    pub command: Option<ServerSubcommand>,
+    /// Detach from the terminal and write output to `server.log`.
+    #[arg(long, hide = true)]
+    pub background: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServerSubcommand {
+    /// Show the running server.
+    Status,
+    /// Stop the running server once its running requests finish. Sessions
+    /// keep running.
+    Stop,
 }
 
 #[derive(Debug, Parser)]
@@ -143,7 +167,6 @@ pub enum SessionSubcommand {
     #[command(hide = true)]
     Serve {
         repository: String,
-        repo_db_path: String,
         workspace: String,
         session: String,
         session_dir: String,

@@ -2,7 +2,7 @@
 //!
 //! A remote sandbox keeps one template per repository: a checkout with the
 //! repository's setup script already run. Templates are built by a detached
-//! `splayctl repo build-template` process, so that a build survives the
+//! `splay repo build-template` process, so that a build survives the
 //! process that started it. The builder never opens the index database,
 //! which a process can keep locked against all others for as long as it
 //! runs: it gets the setup script from a file, and the template's state lives
@@ -14,7 +14,8 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{self, Command, Stdio},
+    process::{self, Stdio},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -22,7 +23,8 @@ use crate::{
     SplayError,
     repos::{Repository, RepositoryStore},
     sandbox::{SandboxKind, TemplateRequest, sandbox},
-    sessions::{process_exists, supervisor_executable, terminate_process},
+    self_command,
+    sessions::{process_exists, terminate_process},
 };
 
 /// How much of the end of the build log `build_log` returns.
@@ -53,7 +55,7 @@ struct TemplateBuild {
 }
 
 /// A repository's template in one sandbox.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TemplateStatus {
     /// The template new workspaces are copied from, if one has been built.
     pub ready: Option<ReadyTemplate>,
@@ -210,7 +212,7 @@ fn start_build(dir: &Path, repo: &Repository, sandbox_kind: SandboxKind) -> Resu
 
     // Pass everything the builder needs, so that it never opens the index
     // database; see `write_wanted_script`.
-    let mut builder = Command::new(supervisor_executable()?);
+    let mut builder = self_command();
     builder
         .args(["repo", "build-template"])
         .arg(dir)
@@ -228,11 +230,15 @@ fn start_build(dir: &Path, repo: &Repository, sandbox_kind: SandboxKind) -> Resu
             Ok(())
         });
     }
-    let child = builder.spawn()?;
+    let mut child = builder.spawn()?;
+    let pid = child.id();
+    // Reap the builder when it exits: until then its pid stays taken, and the
+    // build would look like it is still running.
+    thread::spawn(move || child.wait());
 
     update_state(dir, |state| {
         state.build = Some(TemplateBuild {
-            pid: child.id(),
+            pid,
             name: None,
             started_at: unix_timestamp(),
             error: None,

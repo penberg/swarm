@@ -1,17 +1,19 @@
 use directories::ProjectDirs;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::OwnedMutexGuard;
 use turso::{Builder, Connection, Database};
 
-use crate::{SplayError, database_error, legacy, sandbox::SandboxKind};
+use crate::{SplayError, connect, database_error, legacy, sandbox::SandboxKind};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repository {
     pub host: String,
     pub owner: String,
@@ -111,6 +113,28 @@ impl SplayPaths {
     }
 }
 
+/// Serializes changes to each repository's mirror and workspace names within
+/// the process: git refuses concurrent writes to a repository's config, and
+/// two new workspaces must not take the same name.
+static REPO_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Holds the lock of `repo` until the returned guard is dropped.
+pub async fn lock_repo(repo: &Repository) -> OwnedMutexGuard<()> {
+    let lock = REPO_LOCKS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .entry(repo.canonical())
+        .or_default()
+        .clone();
+    lock.lock_owned().await
+}
+
+/// Returns the directory Splay keeps its state in, without creating it.
+pub fn data_dir() -> Result<PathBuf, SplayError> {
+    Ok(SplayPaths::resolve()?.data_dir)
+}
+
 const INDEX_DB_OPEN_ATTEMPTS: u32 = 40;
 const INDEX_DB_OPEN_RETRY_DELAY: Duration = Duration::from_millis(50);
 
@@ -130,9 +154,7 @@ impl RepositoryStore {
 
         let index_db_path = paths.index_db_path.clone();
         let db = open_index_db(&index_db_path).await?;
-        let conn = db
-            .connect()
-            .map_err(|err| database_error(&index_db_path, "connect", err))?;
+        let conn = connect(&db, &index_db_path)?;
 
         conn.execute_batch(
             "
@@ -328,9 +350,7 @@ impl RepositoryStore {
             .build()
             .await
             .map_err(|err| database_error(&repo_db_path, "open", err))?;
-        let repo_conn = repo_db
-            .connect()
-            .map_err(|err| database_error(&repo_db_path, "connect", err))?;
+        let repo_conn = connect(&repo_db, &repo_db_path)?;
         repo_conn
             .execute_batch(
                 "
@@ -400,6 +420,7 @@ impl RepositoryStore {
             .resolve(repository)
             .await?
             .ok_or_else(|| SplayError::RepositoryNotFound(repository.to_string()))?;
+        let _lock = lock_repo(&repo).await;
         self.sync_repo(&repo)?;
 
         Ok(repo)

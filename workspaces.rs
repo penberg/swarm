@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -8,13 +8,13 @@ use std::{
 use turso::{Builder, Connection, Row};
 
 use crate::{
-    SplayError, database_error,
-    repos::{Repository, RepositoryStore},
+    SplayError, connect, database_error,
+    repos::{Repository, RepositoryStore, lock_repo},
     sandbox::{CreateRequest, Progress, RepoPaths, SandboxKind, sandbox},
     templates,
 };
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub repository: String,
     pub repository_alias: String,
@@ -81,6 +81,12 @@ impl WorkspaceStore {
                 sandbox: sandbox_kind.to_string(),
             });
         }
+        // Remote workspaces leave the mirror alone, and copying a template
+        // takes long enough that they must not wait for each other.
+        let _lock = match sandbox_kind {
+            SandboxKind::Local => Some(lock_repo(&repo).await),
+            _ => None,
+        };
         // Local workspaces branch off the freshly synced mirror; remote ones
         // are copies of the sandbox's template, which fetches by itself.
         let (default_branch, template) = if sandbox_kind == SandboxKind::Local {
@@ -148,6 +154,7 @@ impl WorkspaceStore {
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
             .await?;
+        let _lock = lock_repo(&repo).await;
         let db = self.open_repo_db(&repo).await?;
         let source = self
             .find_workspace(&db, &repo, &reference.workspace)
@@ -242,6 +249,7 @@ impl WorkspaceStore {
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
             .await?;
+        let _lock = lock_repo(&repo).await;
         let db = self.open_repo_db(&repo).await?;
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)
@@ -315,6 +323,7 @@ impl WorkspaceStore {
         let repo = self
             .resolve_repo_from_workspace_reference(&reference)
             .await?;
+        let _lock = lock_repo(&repo).await;
         let db = self.open_repo_db(&repo).await?;
         let workspace = self
             .find_workspace(&db, &repo, &reference.workspace)
@@ -420,9 +429,7 @@ impl WorkspaceStore {
             .build()
             .await
             .map_err(|err| database_error(&repo_db_path, "open", err))?;
-        let conn = db
-            .connect()
-            .map_err(|err| database_error(&repo_db_path, "connect", err))?;
+        let conn = connect(&db, &repo_db_path)?;
 
         migrate_repo_db(&conn, &repo_db_path).await?;
         self.reconcile_workspaces(&conn, repo).await?;
@@ -696,9 +703,32 @@ fn ready_template(
         format!("the {sandbox_kind} template of `{repository}` failed to build: {error}")
     } else {
         format!(
-            "`{repository}` has no {sandbox_kind} template; build it with `splayctl repo template {repository} --rebuild`"
+            "`{repository}` has no {sandbox_kind} template; build it with `splay repo template {repository} --rebuild`"
         )
     }))
+}
+
+/// Returns the git directory of a workspace checkout, following the `.git`
+/// file that linked worktrees have instead of a directory.
+pub fn workspace_git_dir(workspace_path: &Path) -> Result<PathBuf, SplayError> {
+    let git_path = workspace_path.join(".git");
+    if git_path.is_dir() {
+        return Ok(git_path);
+    }
+
+    let contents = fs::read_to_string(&git_path)?;
+    let git_dir = contents
+        .strip_prefix("gitdir: ")
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| SplayError::Git(format!("invalid gitdir file at {}", git_path.display())))?;
+
+    let git_dir = Path::new(git_dir);
+    if git_dir.is_absolute() {
+        return Ok(git_dir.to_path_buf());
+    }
+
+    Ok(workspace_path.join(git_dir))
 }
 
 fn workspace_from_row(repo: &Repository, row: &Row) -> Result<Workspace, SplayError> {

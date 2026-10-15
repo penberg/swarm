@@ -24,17 +24,12 @@ pangocairo = { version = "0.21", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 turso = "0.4"
 
 [[bin]]
-name = "splayctl"
-path = "splayctl.rs"
-
-[[bin]]
 name = "splay"
-path = "ui/splay.rs"
-required-features = ["ui"]
+path = "splay.rs"
 
 # The profile that 'dist' will build with
 [profile.dist]

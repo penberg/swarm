@@ -1,26 +1,24 @@
 use crate::{
     SplayError,
+    api::{PruneSummary, Request},
+    client,
     opts::{PruneCommand, PruneSubcommand},
-    prune::PruneStore,
-    workspaces::PruneReport,
 };
 
 pub async fn run(cmd: PruneCommand) -> Result<(), SplayError> {
-    let store = PruneStore::open().await?;
-
     match cmd.command {
         PruneSubcommand::All => {
-            let sessions = store.sessions().await?;
-            let workspaces = store.workspaces().await?;
+            let sessions: usize = client::call(Request::PruneSessions).await?;
+            let workspaces: PruneSummary = client::call(Request::PruneWorkspaces).await?;
             println!("Pruned {} sessions", sessions);
             report_workspaces(&workspaces)?;
         }
         PruneSubcommand::Sessions => {
-            let pruned = store.sessions().await?;
+            let pruned: usize = client::call(Request::PruneSessions).await?;
             println!("Pruned {} sessions", pruned);
         }
         PruneSubcommand::Workspaces => {
-            let workspaces = store.workspaces().await?;
+            let workspaces: PruneSummary = client::call(Request::PruneWorkspaces).await?;
             report_workspaces(&workspaces)?;
         }
     }
@@ -28,7 +26,7 @@ pub async fn run(cmd: PruneCommand) -> Result<(), SplayError> {
     Ok(())
 }
 
-fn report_workspaces(report: &PruneReport) -> Result<(), SplayError> {
+fn report_workspaces(report: &PruneSummary) -> Result<(), SplayError> {
     println!("Pruned {} archived workspaces", report.pruned.len());
 
     if report.failed.is_empty() {
@@ -42,8 +40,6 @@ fn report_workspaces(report: &PruneReport) -> Result<(), SplayError> {
             failure.error
         );
     }
-    eprintln!(
-        "note: remove the directories listed above manually, then run `splayctl prune` again"
-    );
+    eprintln!("note: remove the directories listed above manually, then run `splay prune` again");
     Err(SplayError::PruneIncomplete(report.failed.len()))
 }

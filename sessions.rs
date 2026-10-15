@@ -1,5 +1,5 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::CString,
@@ -13,16 +13,17 @@ use std::{
         },
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use turso::{Builder, Connection, Row};
 
 use crate::{
-    SplayError, database_error,
+    SplayError, connect, database_error,
     repos::{Repository, RepositoryStore},
     sandbox::sandbox,
-    toolchains,
+    self_command, toolchains,
     workspaces::{Workspace, WorkspaceStore, migrate_repo_db},
 };
 
@@ -33,7 +34,7 @@ const SESSION_STATUS_FAILED: &str = "failed";
 const SESSION_STATUS_STOPPED: &str = "stopped";
 const ATTACH_DETACH_BYTE: u8 = 0x1d;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
     pub repository: String,
@@ -149,7 +150,11 @@ impl SessionStore {
     }
 
     pub async fn stop(&self, session_id: &str) -> Result<Session, SplayError> {
-        let (_repo, mut session, db) = self.find_session(session_id).await?;
+        let (repo, mut session, db) = self.find_session(session_id).await?;
+        // Never signal the pid of a session that has already exited: it may
+        // belong to another process by now.
+        self.refresh_session_status(&db, &repo, &mut session)
+            .await?;
 
         if matches!(
             session.status.as_str(),
@@ -218,19 +223,6 @@ impl SessionStore {
         Ok(pruned)
     }
 
-    pub async fn attach(&self, session_id: &str, _follow: bool) -> Result<(), SplayError> {
-        let (repo, mut session, db) = self.find_session(session_id).await?;
-        self.refresh_session_status(&db, &repo, &mut session)
-            .await?;
-
-        if session.status == SESSION_STATUS_RUNNING && session.socket_path.exists() {
-            attach_to_socket(&session.socket_path)?;
-            return Ok(());
-        }
-
-        print_file(&session.log_path)
-    }
-
     fn prepare_session(
         &self,
         repo: &Repository,
@@ -278,19 +270,17 @@ impl SessionStore {
         session: &Session,
         command: &[String],
     ) -> Result<(), SplayError> {
-        let exe = supervisor_executable()?;
         let supervisor_log_path = session.path.join("supervisor.log");
         let supervisor_log = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&supervisor_log_path)?;
         let supervisor_err = supervisor_log.try_clone()?;
-        let mut child = Command::new(exe);
+        let mut child = self_command();
         child
             .arg("session")
             .arg("serve")
             .arg(repo.canonical())
-            .arg(self.repos.repo_db_path(repo).display().to_string())
             .arg(&workspace.name)
             .arg(&session.id)
             .arg(session.path.display().to_string())
@@ -312,7 +302,10 @@ impl SessionStore {
             });
         }
 
-        child.spawn()?;
+        let mut child = child.spawn()?;
+        // Reap the supervisor when the session ends, so that the process
+        // that started it does not collect zombies.
+        thread::spawn(move || child.wait());
         Ok(())
     }
 
@@ -472,32 +465,58 @@ impl SessionStore {
         _repo: &Repository,
         session: &mut Session,
     ) -> Result<(), SplayError> {
-        if !matches!(
+        let running = matches!(
             session.status.as_str(),
             SESSION_STATUS_RUNNING | SESSION_STATUS_STARTING
-        ) {
+        );
+        // A session's command can be gone before its supervisor records how
+        // it exited; pick the record up once it is there.
+        let unrecorded = session.status == SESSION_STATUS_EXITED && session.exit_code.is_none();
+        if !running && !unrecorded {
             return Ok(());
         }
 
-        let Some(pid) = session.pid else {
-            return Ok(());
-        };
-
-        if process_exists(pid)? {
-            return Ok(());
+        let record = read_exit_record(&session.path);
+        match &record {
+            // A session whose supervisor recorded an exit has ended, even if
+            // another process has since taken its pid.
+            Some(record) => {
+                if unrecorded
+                    && record.exit_code.is_none()
+                    && session.stopped_at == Some(record.exited_at)
+                {
+                    return Ok(());
+                }
+            }
+            None => {
+                if !running {
+                    return Ok(());
+                }
+                let Some(pid) = session.pid else {
+                    return Ok(());
+                };
+                if process_exists(pid)? {
+                    return Ok(());
+                }
+            }
         }
 
         session.status = SESSION_STATUS_EXITED.to_string();
         session.pid = None;
-        session.stopped_at = Some(session.stopped_at.unwrap_or_else(unix_timestamp));
+        session.exit_code = record.as_ref().and_then(|record| record.exit_code);
+        session.stopped_at = record
+            .map(|record| record.exited_at)
+            .or(session.stopped_at)
+            .or_else(|| Some(unix_timestamp()));
 
         db.execute(
             "UPDATE sessions
-             SET pid = NULL, status = ?2, stopped_at = ?3
+             SET pid = NULL, status = ?2, exit_code = ?3, stopped_at = ?4
              WHERE id = ?1",
             (
                 session.id.as_str(),
                 session.status.as_str(),
+                session.exit_code.map(|code| code as i64),
                 session.stopped_at,
             ),
         )
@@ -512,17 +531,18 @@ impl SessionStore {
             .build()
             .await
             .map_err(|err| database_error(&repo_db_path, "open", err))?;
-        let conn = db
-            .connect()
-            .map_err(|err| database_error(&repo_db_path, "connect", err))?;
+        let conn = connect(&db, &repo_db_path)?;
         migrate_repo_db(&conn, &repo_db_path).await?;
         Ok(conn)
     }
 }
 
+/// Runs a session: the supervisor that holds the session's PTY. It never
+/// opens the databases, so that it never holds their locks against the
+/// processes that manage sessions; it records how the session's command
+/// exited in the session directory instead.
 pub async fn serve_runtime(
     repository: &str,
-    repo_db_path: &str,
     workspace: &str,
     session_id: &str,
     session_dir: &str,
@@ -540,7 +560,7 @@ pub async fn serve_runtime(
     let meta_path = session_path.join("meta.toml");
     let ready_path = session_path.join("ready");
     let workspace_path = PathBuf::from(workspace_dir);
-    let repo_db_path = PathBuf::from(repo_db_path);
+    let exit_path = session_path.join("exit");
 
     fs::create_dir_all(&session_path)?;
     if socket_path.exists() {
@@ -551,6 +571,9 @@ pub async fn serve_runtime(
     }
     if pid_path.exists() {
         fs::remove_file(&pid_path)?;
+    }
+    if exit_path.exists() {
+        fs::remove_file(&exit_path)?;
     }
 
     let listener = UnixListener::bind(&socket_path)?;
@@ -580,15 +603,31 @@ pub async fn serve_runtime(
     fs::write(&pid_path, format!("{child_pid}\n"))?;
     File::create(&ready_path)?;
 
-    session_event_loop(
-        &repo_db_path,
-        session_id,
-        child_pid,
-        &pty,
-        listener,
-        &log_path,
-    )
-    .await
+    let exit_code = session_event_loop(child_pid, &pty, listener, &log_path)?;
+    let record = ExitRecord {
+        exit_code,
+        exited_at: unix_timestamp(),
+    };
+    // Write the record under another name first, so that it is never read
+    // half written.
+    let partial_path = session_path.join("exit.partial");
+    fs::write(&partial_path, serde_json::to_vec(&record)?)?;
+    fs::rename(&partial_path, &exit_path)?;
+    Ok(())
+}
+
+/// How a session's command exited, as its supervisor records it in the
+/// session directory.
+#[derive(Serialize, Deserialize)]
+struct ExitRecord {
+    /// None when the supervisor could not tell how the command exited.
+    exit_code: Option<i32>,
+    exited_at: i64,
+}
+
+fn read_exit_record(session_path: &Path) -> Option<ExitRecord> {
+    let record = fs::read(session_path.join("exit")).ok()?;
+    serde_json::from_slice(&record).ok()
 }
 
 fn session_from_row(repo: &Repository, row: &Row) -> Result<Session, SplayError> {
@@ -632,14 +671,14 @@ fn render_session_meta_toml(
     out
 }
 
-async fn session_event_loop(
-    repo_db_path: &Path,
-    session_id: &str,
+/// Relays between the PTY and attached clients until the command exits, and
+/// returns its exit code.
+fn session_event_loop(
     child_pid: u32,
     pty: &Pty,
     listener: UnixListener,
     log_path: &Path,
-) -> Result<(), SplayError> {
+) -> Result<Option<i32>, SplayError> {
     let listener_fd = listener.as_raw_fd();
     let master_fd = pty.master_fd;
     let mut clients: Vec<UnixStream> = Vec::new();
@@ -725,48 +764,19 @@ async fn session_event_loop(
         }
 
         if let Some(status) = reap_process(child_pid)? {
-            let exit_code = decode_wait_status(status);
-            let db = open_repo_db_at_path(repo_db_path).await?;
-            db.execute(
-                "UPDATE sessions
-                 SET pid = NULL, status = ?2, exit_code = ?3, stopped_at = ?4
-                 WHERE id = ?1",
-                (
-                    session_id,
-                    SESSION_STATUS_EXITED,
-                    exit_code.map(|code| code as i64),
-                    Some(unix_timestamp()),
-                ),
-            )
-            .await
-            .map_err(|err| database_error(repo_db_path, "mark session exited", err))?;
-
-            return Ok(());
+            return Ok(decode_wait_status(status));
         }
     }
 }
 
-async fn open_repo_db_at_path(path: &Path) -> Result<Connection, SplayError> {
-    let db = Builder::new_local(path_to_string(path)?)
-        .build()
-        .await
-        .map_err(|err| database_error(path, "open", err))?;
-    let conn = db
-        .connect()
-        .map_err(|err| database_error(path, "connect", err))?;
-    migrate_repo_db(&conn, path).await?;
-    Ok(conn)
-}
-
-pub(crate) fn supervisor_executable() -> Result<PathBuf, SplayError> {
-    let exe = env::current_exe()?;
-    let candidate = exe.with_file_name("splayctl");
-
-    if candidate.exists() {
-        return Ok(candidate);
+/// Attaches the terminal to a running session, or prints the output of one
+/// that ended.
+pub fn attach(session: &Session) -> Result<(), SplayError> {
+    if session.status == SESSION_STATUS_RUNNING && session.socket_path.exists() {
+        return attach_to_socket(&session.socket_path);
     }
 
-    Ok(exe)
+    print_file(&session.log_path)
 }
 
 fn attach_to_socket(socket_path: &Path) -> Result<(), SplayError> {

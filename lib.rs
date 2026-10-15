@@ -1,3 +1,5 @@
+pub mod api;
+pub mod client;
 pub mod cmd;
 pub mod forges;
 mod legacy;
@@ -5,12 +7,18 @@ pub mod opts;
 pub mod prune;
 pub mod repos;
 pub mod sandbox;
+pub mod server;
+pub mod service;
 pub mod sessions;
 pub mod templates;
 pub mod toolchains;
 pub mod workspaces;
 
-use std::path::{Path, PathBuf};
+use std::{
+    os::unix::process::CommandExt,
+    path::{Path, PathBuf},
+    process::Command,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -69,7 +77,7 @@ pub enum SplayError {
     InvalidSandbox(String),
 
     #[error(
-        "{sandbox} is not enabled for repository `{repository}`; enable it with `splayctl repo enable {repository} {sandbox}`"
+        "{sandbox} is not enabled for repository `{repository}`; enable it with `splay repo enable {repository} {sandbox}`"
     )]
     SandboxNotEnabled { repository: String, sandbox: String },
 
@@ -85,6 +93,15 @@ pub enum SplayError {
     #[error("failed to prune {0} workspace(s)")]
     PruneIncomplete(usize),
 
+    #[error("{0}")]
+    Server(String),
+
+    #[error("splay server is unavailable: {0}")]
+    ServerUnavailable(String),
+
+    #[error("another splay server is running; it holds `{0}`")]
+    ServerRunning(PathBuf),
+
     #[error("failed to resolve splay data directory")]
     PathResolution,
 
@@ -92,6 +109,35 @@ pub enum SplayError {
         "cannot move `{path}` to the Splay data directory while {sessions} session(s) still run there; stop them and try again"
     )]
     LegacyDataDirInUse { path: PathBuf, sessions: usize },
+}
+
+/// The running executable. Unlike [`std::env::current_exe`], it keeps
+/// working after an upgrade or rebuild replaces the file that this process
+/// started from.
+pub(crate) const SELF_EXE: &str = "/proc/self/exe";
+
+/// Returns a command that runs this executable; see [`SELF_EXE`].
+pub(crate) fn self_command() -> Command {
+    let mut command = Command::new(SELF_EXE);
+    if let Some(arg0) = std::env::args_os().next() {
+        command.arg0(arg0);
+    }
+    command
+}
+
+/// How long a connection waits for another connection's write to finish.
+/// The database admits one writer at a time, and a process may run several
+/// operations on it at once.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Connects to an open database.
+pub(crate) fn connect(db: &turso::Database, path: &Path) -> Result<turso::Connection, SplayError> {
+    let conn = db
+        .connect()
+        .map_err(|err| database_error(path, "connect", err))?;
+    conn.busy_timeout(BUSY_TIMEOUT)
+        .map_err(|err| database_error(path, "configure", err))?;
+    Ok(conn)
 }
 
 pub fn database_error(path: &Path, operation: &str, source: turso::Error) -> SplayError {

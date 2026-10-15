@@ -838,7 +838,8 @@ headerbar:backdrop {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = Application::builder().application_id(APP_ID).build();
     app.connect_activate(build_ui);
-    app.run();
+    // Splay parses its own command line; GTK must not see `splay ui`.
+    app.run_with_args::<&str>(&[]);
     Ok(())
 }
 
